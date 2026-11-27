@@ -1,0 +1,16 @@
+{
+  "EUGEA.Button": "Import an Eugéa map",
+  "EUGEA.Importing": "Importing map…",
+  "EUGEA.Done": "Map “{name}” imported: {levels} level(s), {walls} walls, {lights} lights, {tiles} objects.",
+  "EUGEA.Errors.NotEugea": "This file is not an Eugéa “Foundry VTT” export (.foundry.json).",
+  "EUGEA.Errors.Failed": "Import failed: {error}",
+  "EUGEA.NativeFallback": "Native levels unavailable ({error}): one scene per floor was created instead.",
+  "EUGEA.StairsFailed": "Stairs could not be linked between levels automatically.",
+  "EUGEA.StairsRegion": "Stairs",
+  "EUGEA.ChangeLevel": "Change level",
+  "EUGEA.Settings.LevelMode.Name": "Floors",
+  "EUGEA.Settings.LevelMode.Hint": "How multi-floor maps are imported. Automatic: native Scene Levels on Foundry V14+, otherwise one scene per floor.",
+  "EUGEA.Settings.LevelMode.Auto": "Automatic",
+  "EUGEA.Settings.LevelMode.Native": "Native levels (V14+)",
+  "EUGEA.Settings.LevelMode.Scenes": "One scene per floor"
+}

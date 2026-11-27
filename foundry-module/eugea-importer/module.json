@@ -1,0 +1,17 @@
+{
+  "id": "eugea-importer",
+  "title": "Eugéa Importer",
+  "description": "Imports maps made with Eugéa in one click: level images, walls, doors (locked, secret), windows, lights, separate objects as tiles and hidden GM notes. Multi-floor maps become native Scene Levels on Foundry V14, or one scene per floor on V11–V13.",
+  "version": "1.0.0",
+  "authors": [{ "name": "Eugéa" }],
+  "compatibility": {
+    "minimum": "11",
+    "verified": "14"
+  },
+  "esmodules": ["scripts/importer.js"],
+  "styles": ["styles/importer.css"],
+  "languages": [
+    { "lang": "fr", "name": "Français", "path": "lang/fr.json" },
+    { "lang": "en", "name": "English", "path": "lang/en.json" }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "eugea",
+  "version": "1.0.0",
+  "description": "Éditeur de cartes de jeu de rôle (donjons, grottes, forêts, villages, étages) avec export direct vers Foundry VTT.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --open",
+    "check": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "~5.4.5",
+    "vite": "~4.5.3",
+    "vite-plugin-singlefile": "~0.13.5"
+  }
+}
