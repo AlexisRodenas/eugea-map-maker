@@ -1,6 +1,7 @@
 import type { LightAnim, Prop } from './model';
 import type { PropPalette } from './themes';
-import { Rng, hashString, rgba, lighten, darken } from './util';
+import { Asset, assetImage } from './assets';
+import { Rng, hashString, rgba, lighten, darken, mix } from './util';
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -34,6 +35,10 @@ export interface PropDef {
   tile?: boolean;
   /** Dessin aléatoire (dépend de l'identifiant de l'objet). */
   rand?: boolean;
+  /** « Toit » : au-dessus des jetons dans Foundry, s'efface quand un jeton passe dessous. */
+  roof?: boolean;
+  /** Se pose en glissant un rectangle (toits, auvents). */
+  area?: boolean;
   draw: (e: DrawEnv) => void;
 }
 
@@ -131,6 +136,86 @@ function canopy(e: DrawEnv, R: number, lobes: number, color: string): void {
   }
   c.fillStyle = lighten(color, 0.18);
   c.fill();
+}
+
+type RoofStyle = 'thatch' | 'tiles' | 'slate' | 'shingle';
+
+/** Toit à deux pans, faîtage dans le sens de la plus grande longueur. */
+function roofDraw(e: DrawEnv, base: string, style: RoofStyle): void {
+  const { c, w, h, rng } = e;
+  const horiz = w >= h;
+  const L = horiz ? w : h,
+    D = horiz ? h : w;
+  c.save();
+  if (!horiz) c.rotate(Math.PI / 2);
+  const x0 = -L / 2,
+    y0 = -D / 2,
+    half = D / 2;
+  const ink = darken(base, 0.55);
+  c.fillStyle = lighten(base, 0.1);
+  c.fillRect(x0, y0, L, half);
+  c.fillStyle = darken(base, 0.17);
+  c.fillRect(x0, 0, L, half);
+  const row = style === 'thatch' ? 0.3 : style === 'slate' ? 0.2 : 0.24;
+  // rangs parallèles au faîtage
+  c.beginPath();
+  for (let v = row; v < half - 0.02; v += row) {
+    line(c, x0, -v, x0 + L, -v);
+    line(c, x0, v, x0 + L, v);
+  }
+  st(e, rgba(ink, style === 'thatch' ? 0.35 : 0.55), e.lw * 0.6);
+  // brins de chaume / joints des tuiles, ardoises, bardeaux
+  c.beginPath();
+  if (style === 'thatch') {
+    for (const side of [-1, 1])
+      for (let v = 0; v < half; v += row)
+        for (let u = x0 + rng.float(0, 0.12); u < x0 + L; u += rng.float(0.11, 0.2)) {
+          const dx = rng.float(-0.05, 0.05);
+          line(c, u, side * v, u + dx, side * Math.min(half, v + row * rng.float(0.75, 1.15)));
+        }
+    st(e, rgba(ink, 0.45), e.lw * 0.45);
+  } else {
+    const joint = style === 'slate' ? 0.34 : style === 'tiles' ? 0.22 : 0;
+    const hi: number[] = [];
+    for (const side of [-1, 1]) {
+      let k = 0;
+      for (let v = 0; v < half - 0.01; v += row, k++) {
+        let u = x0 + (k % 2 ? (joint || 0.16) / 2 : 0);
+        const v2 = Math.min(half, v + row);
+        for (;;) {
+          const step = joint || rng.float(0.12, 0.3);
+          if (style === 'tiles') hi.push(u + step / 2, side * v, side * v2);
+          u += step;
+          if (u >= x0 + L - 0.02) break;
+          line(c, u, side * v, u, side * v2);
+        }
+      }
+    }
+    st(e, rgba(ink, 0.5), e.lw * 0.5);
+    if (hi.length) {
+      // tuiles canal : reflet au milieu de chaque tuile
+      c.beginPath();
+      for (let i = 0; i < hi.length; i += 3) if (hi[i] < x0 + L - 0.05) line(c, hi[i], hi[i + 1], hi[i], hi[i + 2]);
+      st(e, rgba(lighten(base, 0.35), 0.4), e.lw * 0.9);
+    }
+  }
+  // faîtage
+  c.beginPath();
+  c.rect(x0, -0.08, L, 0.16);
+  c.fillStyle = darken(base, style === 'thatch' ? 0.3 : 0.38);
+  c.fill();
+  // rives et égouts
+  c.beginPath();
+  c.rect(x0 + 0.03, y0 + 0.03, L - 0.06, D - 0.06);
+  st(e, rgba(ink, 0.35), 0.06);
+  c.beginPath();
+  c.rect(x0, y0, L, D);
+  st(e, e.pal.ink, e.lw * 1.2);
+  c.restore();
+}
+
+function roofDef(kind: string, name: string, style: RoofStyle, color: (p: PropPalette) => string): PropDef {
+  return { kind, name, cat: 'Toits', w: 5, h: 4, layer: 3, roof: true, area: true, rand: true, draw: (e) => roofDraw(e, color(e.pal), style) };
 }
 
 // ---------- Catalogue ----------
@@ -1281,34 +1366,136 @@ export const PROPS: PropDef[] = [
       st(e, rgba(pal.ink, 0.6), e.lw * 0.7);
     },
   },
+  // --- Toits (tuiles Foundry au-dessus des jetons)
+  roofDef('roofThatch', 'Toit de chaume', 'thatch', (p) => mix(p.wood, '#c9a45f', 0.65)),
+  roofDef('roofTiles', 'Toit de tuiles', 'tiles', (p) => mix(p.wood, '#b24a30', 0.75)),
+  roofDef('roofSlate', 'Toit d’ardoise', 'slate', (p) => mix(p.stone, '#4d5864', 0.7)),
+  roofDef('roofShingle', 'Toit de bardeaux', 'shingle', (p) => mix(p.woodDark, '#7a5534', 0.55)),
+  {
+    kind: 'awning',
+    name: 'Auvent',
+    cat: 'Toits',
+    w: 3,
+    h: 1.5,
+    layer: 3,
+    roof: true,
+    area: true,
+    draw: (e) => {
+      const { c, w, h, pal } = e;
+      const n = Math.max(2, Math.round(w / 0.5));
+      const sw = w / n;
+      for (let i = 0; i < n; i++) {
+        c.beginPath();
+        c.rect(-w / 2 + i * sw, -h / 2, sw, h - 0.12);
+        c.fillStyle = i % 2 ? pal.paper : pal.cloth;
+        c.fill();
+        c.beginPath();
+        c.arc(-w / 2 + (i + 0.5) * sw, h / 2 - 0.12, sw / 2, 0, Math.PI);
+        c.fillStyle = i % 2 ? darken(pal.paper, 0.1) : darken(pal.cloth, 0.1);
+        c.fill();
+      }
+      c.beginPath();
+      c.rect(-w / 2, -h / 2, w, h - 0.12);
+      st(e);
+    },
+  },
+  {
+    kind: 'canopy',
+    rand: true,
+    name: 'Frondaison',
+    cat: 'Toits',
+    w: 4,
+    h: 4,
+    layer: 3,
+    roof: true,
+    draw: (e) => canopy(e, (Math.min(e.w, e.h) / 2) * 0.97, 9, darken(e.pal.plant, 0.06)),
+  },
+  // Image personnelle (bibliothèque) : dessinée par drawProp, absente du catalogue
+  { kind: 'image', name: 'Image', cat: '', w: 1, h: 1, draw: () => undefined },
 ];
 
 export const PROP_BY_KIND: Record<string, PropDef> = Object.fromEntries(PROPS.map((p) => [p.kind, p]));
 
-export const PROP_CATS = [...new Set(PROPS.map((p) => p.cat))];
+export const PROP_CATS = [...new Set(PROPS.filter((p) => p.cat).map((p) => p.cat))];
+
+export type Skins = Record<string, string[]> | undefined;
 
 const rngCache = new Map<string, number>();
 
-export function drawProp(c: Ctx, p: Prop, pal: PropPalette): void {
+function seedOf(id: string): number {
+  let seed = rngCache.get(id);
+  if (seed === undefined) {
+    seed = hashString(id);
+    rngCache.set(id, seed);
+  }
+  return seed;
+}
+
+/** Image personnelle dessinée pour cet objet (objet « image », ou habillage d'un objet intégré). */
+export function propAsset(p: Prop, skins: Skins): string | undefined {
+  if (p.kind === 'image') return p.asset;
+  const list = skins?.[p.kind];
+  if (!list || !list.length) return undefined;
+  return list.length === 1 ? list[0] : list[seedOf(p.id) % list.length];
+}
+
+/** Taille de l'image dans la boîte de l'objet : étirée (objet image) ou contenue sans déformation (habillage). */
+export function assetBox(p: Prop, a: { w: number; h: number }): { w: number; h: number } {
+  if (p.kind === 'image') return { w: p.w, h: p.h };
+  const ar = a.w / a.h;
+  return ar > p.w / p.h ? { w: p.w, h: p.w / ar } : { w: p.h * ar, h: p.h };
+}
+
+function drawAsset(c: Ctx, p: Prop, a: Asset): void {
+  const b = assetBox(p, a);
+  c.imageSmoothingEnabled = true;
+  c.imageSmoothingQuality = 'high';
+  c.drawImage(a.img, -b.w / 2, -b.h / 2, b.w, b.h);
+}
+
+function drawMissing(c: Ctx, p: Prop, pal: PropPalette): void {
+  c.beginPath();
+  c.rect(-p.w / 2, -p.h / 2, p.w, p.h);
+  c.moveTo(-p.w / 2, -p.h / 2);
+  c.lineTo(p.w / 2, p.h / 2);
+  c.moveTo(p.w / 2, -p.h / 2);
+  c.lineTo(-p.w / 2, p.h / 2);
+  c.setLineDash([0.12, 0.08]);
+  c.lineWidth = 0.04;
+  c.strokeStyle = rgba(pal.accent, 0.8);
+  c.stroke();
+  c.setLineDash([]);
+}
+
+export function drawProp(c: Ctx, p: Prop, pal: PropPalette, skins?: Skins): void {
   const def = PROP_BY_KIND[p.kind];
   if (!def) return;
-  let seed = rngCache.get(p.id);
-  if (seed === undefined) {
-    seed = hashString(p.id);
-    rngCache.set(p.id, seed);
-  }
   c.save();
   c.translate(p.x, p.y);
   if (p.rot) c.rotate((p.rot * Math.PI) / 180);
   c.lineJoin = 'round';
   c.lineCap = 'round';
-  def.draw({ c, w: p.w, h: p.h, pal, rng: new Rng(seed), lw: 0.045 });
+  const aid = propAsset(p, skins);
+  const a = aid ? assetImage(aid) : null;
+  if (a) drawAsset(c, p, a);
+  else if (p.kind === 'image') drawMissing(c, p, pal);
+  else def.draw({ c, w: p.w, h: p.h, pal, rng: new Rng(seedOf(p.id)), lw: 0.045 });
   c.restore();
 }
 
-/** L'objet est-il exporté comme tuile séparée dans Foundry ? */
+/** Toit : au-dessus des jetons dans Foundry (s'efface quand un jeton passe dessous). */
+export function isRoof(p: Prop): boolean {
+  return p.roof ?? !!PROP_BY_KIND[p.kind]?.roof;
+}
+
+/** L'objet est-il exporté comme tuile séparée dans Foundry ? (les toits le sont toujours) */
 export function isTile(p: Prop): boolean {
-  return p.tile ?? !!PROP_BY_KIND[p.kind]?.tile;
+  return isRoof(p) || (p.tile ?? !!PROP_BY_KIND[p.kind]?.tile);
+}
+
+/** Ordre de dessin : 0 au sol, 1 normal, 2 dessus, 3 toits. */
+export function propLayer(p: Prop): number {
+  return isRoof(p) ? 3 : (PROP_BY_KIND[p.kind]?.layer ?? 1);
 }
 
 /** Lumière émise par un objet (brasero, torche...), ou null. */

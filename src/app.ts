@@ -3,7 +3,10 @@ import { History } from './history';
 import { Renderer } from './render';
 import { COLOR_KEYS, ResolvedTheme, THEMES, resolveTheme } from './themes';
 import { PInfo, Tool, ToolOpts, createTools, defaultToolOpts } from './tools';
-import { PROP_BY_KIND, drawProp, hitProp, isTile } from './props';
+import { PROP_BY_KIND, drawProp, hitProp, isRoof, isTile, propLayer } from './props';
+import { addAsset, assetImage, exportAssets, importAssets, isImageName, library, onAssetsChanged } from './assets';
+import { pickSkinTarget } from './library-panel';
+import { MODULE_URL } from './links';
 import { button, checkbox, colorInput, field, h, icon, modal, numberInput, range, section, segmented, select, toast } from './ui';
 import { clamp, downloadBlob, slugify, toHex, uid } from './util';
 import { openGenerator } from './dialogs/generate';
@@ -29,6 +32,8 @@ export class App {
   view = { scale: BASE_SCALE, ox: -2, oy: -2 };
   viewMode: 'editor' | 'player' = 'editor';
   lightingPreview = false;
+  /** Toits affichés, ou estompés pour travailler l'intérieur des bâtiments (touche K). */
+  roofView: 'show' | 'ghost' = 'show';
   showGhost = true;
   private ghost: { id: string; map: DungeonMap } | null = null;
   private ghostRenderer = new Renderer();
@@ -72,6 +77,15 @@ export class App {
     this.fitView();
     this.selectTool('room');
     this.renderLevelBar();
+    onAssetsChanged(() => this.requestRender());
+    library.onChange(() => {
+      if (this.tool.id === 'prop') this.renderPanel();
+    });
+    void library.restore();
+  }
+
+  get panelElement(): HTMLElement {
+    return this.panelEl;
   }
 
   // ---------- Carte ----------
@@ -265,8 +279,8 @@ export class App {
     this.requestRender();
   }
 
-  toast(msg: string): void {
-    toast(msg);
+  toast(msg: string, kind: 'info' | 'error' | 'ok' = 'info'): void {
+    toast(msg, kind);
   }
 
   // ---------- Vue ----------
@@ -324,6 +338,7 @@ export class App {
       grid: this.map.settings.showGrid,
       lighting,
       selection: this.selection,
+      roofs: this.roofView,
     });
     if (this.viewMode === 'editor' && this.showGhost && this.map.cur > 0) {
       const below = this.map.levels[this.map.cur - 1];
@@ -495,6 +510,7 @@ export class App {
       if (k === 'g') this.toggle('grid');
       else if (k === 'p') this.toggle('player');
       else if (k === 'i') this.toggle('light');
+      else if (k === 'k') this.toggle('roofs');
       else if (k === '0') this.fitView();
       else if (k === '+' || k === '=') this.zoomAt(1.25, this.canvas.clientWidth / 2, this.canvas.clientHeight / 2);
       else if (k === '-') this.zoomAt(0.8, this.canvas.clientWidth / 2, this.canvas.clientHeight / 2);
@@ -512,9 +528,34 @@ export class App {
     window.addEventListener('dragover', (e) => e.preventDefault());
     window.addEventListener('drop', (e) => {
       e.preventDefault();
-      const f = e.dataTransfer?.files?.[0];
-      if (f) this.readFile(f);
+      const files = [...(e.dataTransfer?.files ?? [])];
+      const images = files.filter((f) => isImageName(f.name));
+      if (images.length) {
+        void this.dropImages(images, e);
+        return;
+      }
+      if (files[0]) this.readFile(files[0]);
     });
+  }
+
+  /** Images déposées sur la carte : posées là où elles tombent. */
+  private async dropImages(files: File[], e: DragEvent): Promise<void> {
+    const r = this.canvas.getBoundingClientRect();
+    let wx = this.view.ox + (e.clientX - r.left) / this.view.scale,
+      wy = this.view.oy + (e.clientY - r.top) / this.view.scale;
+    this.edit();
+    for (const f of files) {
+      try {
+        const a = await addAsset(f, f.name.replace(/\.[^.]+$/, ''));
+        const sz = library.sizeOf(a);
+        this.map.props.push({ id: uid(), kind: 'image', asset: a.id, x: wx, y: wy, w: sz.w, h: sz.h, rot: 0, gmOnly: false });
+        wx += 0.5;
+        wy += 0.5;
+      } catch (err) {
+        toast(`« ${f.name} » : image illisible.`, 'error');
+      }
+    }
+    this.changed(false);
   }
 
   private updateCursor(): void {
@@ -579,6 +620,7 @@ export class App {
       grid: () => this.toggle('grid'),
       player: () => this.toggle('player'),
       light: () => this.toggle('light'),
+      roofs: () => this.toggle('roofs'),
       fit: () => this.fitView(),
       help: () => this.help(),
     };
@@ -595,12 +637,19 @@ export class App {
     this.updateToggles();
   }
 
-  private toggle(what: 'grid' | 'player' | 'light'): void {
+  private toggle(what: 'grid' | 'player' | 'light' | 'roofs'): void {
     if (what === 'grid') {
       this.map.settings.showGrid = !this.map.settings.showGrid;
       this.changed(false);
     } else if (what === 'player') this.viewMode = this.viewMode === 'player' ? 'editor' : 'player';
-    else this.lightingPreview = !this.lightingPreview;
+    else if (what === 'roofs') {
+      this.roofView = this.roofView === 'show' ? 'ghost' : 'show';
+      if (this.roofView === 'ghost') {
+        const roofIds = new Set(this.map.props.filter(isRoof).map((p) => p.id));
+        for (const id of [...this.selection]) if (roofIds.has(id)) this.selection.delete(id);
+        this.renderPanel();
+      }
+    } else this.lightingPreview = !this.lightingPreview;
     this.updateToggles();
     this.updateStatus();
     this.requestRender();
@@ -611,6 +660,7 @@ export class App {
     set('grid', this.map.settings.showGrid);
     set('player', this.viewMode === 'player');
     set('light', this.lightingPreview);
+    set('roofs', this.roofView === 'ghost');
   }
 
   // ---------- Sélection ----------
@@ -635,9 +685,10 @@ export class App {
       for (let i = m.lights.length - 1; i >= 0; i--) if (Math.hypot(wx - m.lights[i].x, wy - m.lights[i].y) <= r) return m.lights[i].id;
     }
     if (kinds.includes('prop')) {
-      const order = m.props.map((p, i) => [p, i] as [Prop, number]).sort((a, b) => (PROP_BY_KIND[b[0].kind]?.layer ?? 1) - (PROP_BY_KIND[a[0].kind]?.layer ?? 1) || b[1] - a[1]);
+      const order = m.props.map((p, i) => [p, i] as [Prop, number]).sort((a, b) => propLayer(b[0]) - propLayer(a[0]) || b[1] - a[1]);
       for (const [p] of order) {
         if (this.viewMode === 'player' && p.gmOnly) continue;
+        if (this.roofView === 'ghost' && isRoof(p)) continue;
         if (hitProp(p, wx, wy)) return p.id;
       }
     }
@@ -726,7 +777,7 @@ export class App {
     }, 0);
   }
 
-  drawThumb(cv: HTMLCanvasElement, kind: string): void {
+  drawThumb(cv: HTMLCanvasElement, kind: string, skins = true): void {
     const def = PROP_BY_KIND[kind];
     const ctx = cv.getContext('2d')!;
     const S = cv.width;
@@ -736,7 +787,7 @@ export class App {
     ctx.fillRect(0, 0, S, S);
     const sc = (S / Math.max(def.w, def.h, 1)) * 0.86;
     ctx.setTransform(sc, 0, 0, sc, S / 2, S / 2);
-    drawProp(ctx, { id: 'thumb-' + kind, kind, x: 0, y: 0, w: def.w, h: def.h, rot: 0, gmOnly: false }, this.theme.pal);
+    drawProp(ctx, { id: 'thumb-' + kind, kind, x: 0, y: 0, w: def.w, h: def.h, rot: 0, gmOnly: false }, this.theme.pal, skins ? this.map.settings.skins : undefined);
   }
 
   // ---------- Panneau latéral ----------
@@ -790,7 +841,11 @@ export class App {
     const o = objs[0];
     if ('kind' in o) {
       const def = PROP_BY_KIND[o.kind];
-      return this.sec('Objet : ' + (def?.name ?? o.kind), [
+      const asset = o.kind === 'image' && o.asset ? assetImage(o.asset) : null;
+      const isImage = o.kind === 'image';
+      const skinned = !isImage && (this.map.settings.skins[o.kind]?.length ?? 0);
+      const roof = isRoof(o);
+      return this.sec('Objet : ' + (isImage ? (asset?.name ?? 'image') : (def?.name ?? o.kind)), [
         field(
           'Rotation',
           button(icon('rotL'), () => this.rotateSelection(-90), 'icon', '-90°'),
@@ -810,41 +865,69 @@ export class App {
           'Taille',
           numberInput(o.w, {
             min: 0.25,
-            max: 20,
+            max: 40,
             step: 0.25,
             onChange: (v) => {
               ed();
+              // images : les proportions sont conservées
+              if (isImage && o.w > 0) o.h = Math.round(((o.h * v) / o.w) * 100) / 100;
               o.w = v;
               done();
+              if (isImage) this.renderPanel();
             },
           }),
           h('span', { class: 'muted' }, '×'),
           numberInput(o.h, {
             min: 0.25,
-            max: 20,
+            max: 40,
             step: 0.25,
             onChange: (v) => {
               ed();
+              if (isImage && o.h > 0) o.w = Math.round(((o.w * v) / o.h) * 100) / 100;
               o.h = v;
               done();
+              if (isImage) this.renderPanel();
             },
           }),
         ),
+        isImage && asset ? button('Taille d’origine', () => {
+          ed();
+          const sz = library.sizeOf(asset);
+          o.w = sz.w;
+          o.h = sz.h;
+          done();
+          this.renderPanel();
+        }, 'small', `Selon l’échelle de la bibliothèque (${library.prefs.ppc} px = 1 case)`) : null,
+        isImage && asset ? button('Remplacer un objet intégré par cette image…', () => pickSkinTarget(this, asset), 'small') : null,
+        skinned ? h('p', { class: 'help' }, `Dessiné avec vos images (${skinned} variante${skinned > 1 ? 's' : ''}) : onglet Objets → Mes images.`) : null,
         checkbox('Visible MJ uniquement', o.gmOnly, (v) => {
           ed();
           o.gmOnly = v;
           done();
         }),
         checkbox(
-          'Objet séparé (tuile Foundry)',
-          isTile(o),
+          'Toit (au-dessus des jetons)',
+          roof,
           (v) => {
             ed();
-            o.tile = v;
+            o.roof = v;
             done();
+            this.renderPanel();
           },
-          'Exporté comme tuile indépendante : déplaçable, masquable ou supprimable dans Foundry (coffre pillé, caisse…)',
+          'Tuile Foundry au-dessus des jetons, qui s’efface quand un jeton passe dessous (toits, cimes d’arbres, auvents…)',
         ),
+        roof
+          ? null
+          : checkbox(
+              'Objet séparé (tuile Foundry)',
+              isTile(o),
+              (v) => {
+                ed();
+                o.tile = v;
+                done();
+              },
+              'Exporté comme tuile indépendante : déplaçable, masquable ou supprimable dans Foundry (coffre pillé, caisse…)',
+            ),
         def?.light
           ? checkbox('Émet de la lumière', !o.noLight, (v) => {
               ed();
@@ -1080,10 +1163,13 @@ export class App {
 
   // ---------- Fichiers ----------
 
-  save(): void {
-    const blob = new Blob([JSON.stringify(this.map.toJSON())], { type: 'application/json' });
+  async save(): Promise<void> {
+    const data = this.map.toJSON();
+    const ids = this.map.usedAssets();
+    if (ids.length) data.assets = await exportAssets(ids);
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     downloadBlob(blob, `${slugify(this.map.name)}.eugea.json`);
-    toast('Carte enregistrée.', 'ok');
+    toast(ids.length ? `Carte enregistrée (avec ${Object.keys(data.assets ?? {}).length} image(s) personnelle(s)).` : 'Carte enregistrée.', 'ok');
   }
 
   openFile(): void {
@@ -1097,9 +1183,11 @@ export class App {
 
   private readFile(f: File): void {
     f.text()
-      .then((txt) => {
+      .then(async (txt) => {
         const data = JSON.parse(txt) as SavedMap;
-        this.loadMap(DungeonMap.fromJSON(data));
+        const m = DungeonMap.fromJSON(data);
+        await importAssets(data.assets);
+        this.loadMap(m);
         toast(`« ${this.map.name} » ouverte.`, 'ok');
       })
       .catch((err) => toast('Impossible d’ouvrir ce fichier : ' + (err?.message ?? err), 'error'));
@@ -1190,6 +1278,13 @@ export class App {
             k('G', 'Afficher / masquer la grille'),
             k('P', 'Vue joueurs (cache les infos MJ)'),
             k('I', "Aperçu de l'éclairage"),
+            k('K', 'Voir à travers les toits'),
+          ),
+          h('h3', {}, 'Vos images'),
+          h(
+            'p',
+            {},
+            'Objets → « Mes images » : connectez un dossier d’images (arbres, coffres, packs d’assets…) ou glissez des images sur la carte. Clic droit sur une image : la dessiner à la place d’un objet intégré, y compris dans les cartes générées. Les images sont enregistrées dans le fichier .eugea.json.',
           ),
         ),
         h(
@@ -1214,8 +1309,9 @@ export class App {
           h(
             'p',
             {},
-            'Exporter → « Foundry VTT » : un seul fichier avec les images de chaque niveau, les murs, portes (normales, verrouillées, secrètes), fenêtres, lumières, objets séparés (tuiles) et notes MJ cachées. Dans Foundry, avec le module « Eugéa Importer » : onglet Scènes → bouton « Importer une carte Eugéa ». En V14 les étages deviennent des niveaux natifs ; avant, une scène par étage.',
+            'Exporter → « Foundry VTT » : un seul fichier avec les images de chaque niveau, les murs, portes (normales, verrouillées, secrètes), fenêtres, lumières, objets séparés et toits en tuiles, et notes MJ cachées. Dans Foundry, avec le module « Eugéa Importer » : onglet Scènes → bouton « Importer une carte Eugéa ». En V14 les étages deviennent des niveaux natifs ; avant, une scène par étage.',
           ),
+          h('p', {}, h('a', { href: MODULE_URL, target: '_blank', rel: 'noopener' }, 'Installer le module Eugéa Importer')),
         ),
       ),
     );

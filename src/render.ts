@@ -1,7 +1,7 @@
 import { DungeonMap, EDGE, Prop, T } from './model';
 import { GeoCache, Geometry, Portal, TerrainGeo } from './geometry';
 import { LightingCache, allLights } from './lighting';
-import { PROP_BY_KIND, drawProp, propBounds } from './props';
+import { drawProp, isRoof, propBounds, propLayer } from './props';
 import type { ResolvedTheme } from './themes';
 import { hash2, luminance, mix, rgba } from './util';
 
@@ -24,6 +24,8 @@ export interface RenderOpts {
   selection?: ReadonlySet<string>;
   /** Filtre des objets dessinés dans l'image (les tuiles Foundry séparées en sont exclues). */
   bakeProp?: (p: Prop) => boolean;
+  /** Toits : affichés (défaut), estompés pour voir l'intérieur, ou cachés. */
+  roofs?: 'show' | 'ghost' | 'hide';
 }
 
 // ---------- Texture de papier (tuile périodique) ----------
@@ -130,7 +132,7 @@ export class Renderer {
     ctx.stroke(geo.wallPath);
     ctx.setLineDash([]);
     ctx.globalAlpha = 0.3;
-    for (const p of map.props) drawProp(ctx, p, theme.pal);
+    for (const p of map.props) if (!isRoof(p)) drawProp(ctx, p, theme.pal, map.settings.skins);
     ctx.restore();
   }
 
@@ -225,17 +227,35 @@ export class Renderer {
       if (p.type === EDGE.SECRET && o.mode !== 'player') marks.push(p);
     }
 
-    // Objets
+    // Objets (les toits en dernier)
+    const roofs = o.roofs ?? 'show';
+    const skins = map.settings.skins;
     const props = map.props
       .filter((p) => !(p.gmOnly && o.mode === 'player'))
       .filter((p) => !o.bakeProp || o.bakeProp(p))
+      .filter((p) => roofs !== 'hide' || !isRoof(p))
       .filter((p) => {
         const b = propBounds(p);
         return b.x1 >= vx0 && b.x0 <= vx1 && b.y1 >= vy0 && b.y0 <= vy1;
       })
-      .sort((a, b) => (PROP_BY_KIND[a.kind]?.layer ?? 1) - (PROP_BY_KIND[b.kind]?.layer ?? 1));
-    for (const p of props) {
-      drawProp(ctx, p, theme.pal);
+      .map((p, i) => [p, propLayer(p), i] as [Prop, number, number])
+      .sort((a, b) => a[1] - b[1] || a[2] - b[2]);
+    for (const [p, layer] of props) {
+      if (layer === 3 && roofs === 'ghost') {
+        ctx.save();
+        ctx.globalAlpha = 0.18;
+        drawProp(ctx, p, theme.pal, skins);
+        ctx.globalAlpha = 0.7;
+        ctx.translate(p.x, p.y);
+        ctx.rotate((p.rot * Math.PI) / 180);
+        ctx.setLineDash([0.2, 0.12]);
+        ctx.strokeStyle = theme.accent;
+        ctx.lineWidth = Math.max(0.04, 1.2 * px);
+        ctx.strokeRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.restore();
+        continue;
+      }
+      drawProp(ctx, p, theme.pal, skins);
       if (p.gmOnly && o.mode !== 'player' && p.kind !== 'trap') {
         const b = propBounds(p);
         ctx.save();

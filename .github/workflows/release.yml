@@ -1,6 +1,5 @@
-# Crée une release à chaque tag vX.Y.Z :
-#  - module.json + eugea-importer.zip (installation Foundry par lien de manifeste)
-#  - eugea.html (l'éditeur complet en un seul fichier, utilisable hors-ligne)
+# Crée une release à chaque tag vX.Y.Z avec eugea.html : l'éditeur complet en un seul fichier,
+# utilisable hors-ligne. Le module Foundry a son propre dépôt (eugea-importer).
 name: Release
 
 on:
@@ -21,31 +20,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-
-      - name: Préparer le module Foundry
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          REPO="https://github.com/${GITHUB_REPOSITORY}"
-          cd foundry-module/eugea-importer
-          node -e '
-            const fs = require("fs");
-            const [version, repo, tag] = process.argv.slice(1);
-            const m = JSON.parse(fs.readFileSync("module.json", "utf8"));
-            m.version = version;
-            m.url = repo;
-            m.manifest = `${repo}/releases/latest/download/module.json`;
-            m.download = `${repo}/releases/download/${tag}/eugea-importer.zip`;
-            fs.writeFileSync("module.json", JSON.stringify(m, null, 2) + "\n");
-          ' "$VERSION" "$REPO" "$GITHUB_REF_NAME"
-          zip -r ../../eugea-importer.zip .
-          cp module.json ../../module.json
-
       - run: cp dist/index.html eugea.html
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            module.json
-            eugea-importer.zip
-            eugea.html
+          files: eugea.html
           generate_release_notes: true

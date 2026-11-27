@@ -82,6 +82,7 @@ const SPECS: Record<Kind, Spec[]> = {
     { key: 'clearing', label: 'Clairière avec campement', type: 'bool' },
     { key: 'ruins', label: 'Ruines anciennes', type: 'bool' },
     { key: 'winter', label: 'Hiver (neige, sapins)', type: 'bool' },
+    { key: 'canopy', label: 'Cimes des arbres en toits (Foundry)', type: 'bool' },
     { key: 'props', label: 'Sous-bois', type: 'pct' },
     { key: 'lights', label: 'Éclairage', type: 'pct' },
   ],
@@ -96,6 +97,7 @@ const SPECS: Record<Kind, Spec[]> = {
     { key: 'interiors', label: 'Mobilier intérieur', type: 'pct' },
     { key: 'lights', label: 'Lanternes', type: 'pct' },
     { key: 'names', label: 'Noms des bâtiments (MJ)', type: 'bool' },
+    { key: 'roofs', label: 'Toits (s’effacent quand on entre, touche K)', type: 'bool' },
   ],
 };
 

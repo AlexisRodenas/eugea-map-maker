@@ -15,6 +15,7 @@ export interface ForestParams {
   winter: boolean;
   props: number;
   lights: number;
+  canopy: boolean; // cimes des arbres en toits Foundry
 }
 
 export const DEFAULT_FOREST: ForestParams = {
@@ -30,6 +31,7 @@ export const DEFAULT_FOREST: ForestParams = {
   winter: false,
   props: 0.6,
   lights: 0.5,
+  canopy: false,
 };
 
 interface Spot {
@@ -207,7 +209,7 @@ export function generateForest(p: ForestParams): DungeonMap {
         const near = pathDist[i] < 3;
         const size = rng.float(1.6, 3) * (near ? 0.75 : 1);
         const kind = rng.chance(p.winter ? 0.75 : 0.4) ? 'pine' : 'tree';
-        P.put(kind, x, y, rng.int(0, 23) * 15, { w: size, h: size, force: true, mark: false });
+        P.put(kind, x, y, rng.int(0, 23) * 15, { w: size, h: size, force: true, mark: false, roof: p.canopy && size >= 2 });
         P.block(cx, cy);
       }
 

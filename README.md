@@ -1,8 +1,10 @@
 # Eugéa
 
-**Éditeur de cartes pour le jeu de rôle** : donjons, grottes, labyrinthes, forêts, villages et villes, sur plusieurs étages, avec un **export direct vers Foundry VTT** (murs, portes, lumières, objets séparés, niveaux).
+**Éditeur de cartes pour le jeu de rôle** : donjons, grottes, labyrinthes, forêts, villages et villes, sur plusieurs étages, avec un **export direct vers Foundry VTT** où tout est déjà posé : murs, portes, lumières, objets séparés, toits et niveaux.
 
 Rapide même sur de grandes cartes, entièrement dans le navigateur, sans compte ni serveur.
+
+**[▶ Ouvrir Eugéa dans le navigateur](https://alexisrodenas.github.io/eugea-map-maker/)**
 
 ![Village généré](docs/village.jpg)
 
@@ -12,11 +14,11 @@ Rapide même sur de grandes cartes, entièrement dans le navigateur, sans compte
 
 ## Utiliser Eugéa
 
-- **En ligne** : la page GitHub Pages du dépôt (onglet *Environments → github-pages*).
-- **Hors-ligne** : téléchargez `eugea.html` dans la dernière [Release](../../releases) et ouvrez-le dans votre navigateur. Un seul fichier, rien à installer.
+- **En ligne** : [alexisrodenas.github.io/eugea-map-maker](https://alexisrodenas.github.io/eugea-map-maker/).
+- **Hors-ligne** : téléchargez `eugea.html` dans la dernière [Release](https://github.com/AlexisRodenas/eugea-map-maker/releases/latest) et ouvrez-le dans votre navigateur. Un seul fichier, rien à installer.
 - **Depuis les sources** (Windows) : double-cliquez sur `Lancer.bat`, ou `npm install` puis `npm run dev`.
 
-Le travail est **sauvegardé automatiquement** dans le navigateur. `Ctrl+S` télécharge un fichier `.eugea.json` (à rouvrir avec le bouton Ouvrir ou par glisser-déposer).
+Le travail est **sauvegardé automatiquement** dans le navigateur. `Ctrl+S` télécharge un fichier `.eugea.json`, à rouvrir avec le bouton Ouvrir ou par glisser-déposer. Les images personnelles utilisées sur la carte sont incluses dans ce fichier.
 
 ## Fonctionnalités
 
@@ -31,6 +33,10 @@ Le travail est **sauvegardé automatiquement** dans le navigateur. `Ctrl+S` tél
 - Textes et numérotation automatique des salles.
 - **Étages** : autant de niveaux que nécessaire (sous-sols, étages), sur la même grille, avec le niveau inférieur affiché en transparence pour aligner escaliers et murs.
 
+**Toits** : chaume, tuiles, ardoise, bardeaux, auvents, frondaisons. Un toit se pose en glissant un rectangle, ou d'un clic sur « Couvrir chaque bâtiment ». N'importe quel objet (arbre, pont, image…) peut aussi devenir un toit. Dans Foundry, les toits passent au-dessus des jetons et s'effacent quand un jeton entre dessous. La touche `K` permet de voir à travers pour travailler l'intérieur.
+
+**Vos images** (onglet *Objets → Mes images*) : connectez un dossier d'images (PNG, WebP, SVG… par exemple un pack d'assets), avec recherche et sous-dossiers, ou glissez des images directement sur la carte. Une image peut aussi **remplacer le dessin d'un objet intégré** (vos arbres à la place des arbres d'Eugéa, vos coffres…), y compris dans les cartes générées, avec plusieurs variantes tirées au hasard. Dans Foundry, elles deviennent des tuiles avec le fichier d'origine, sans perte de qualité.
+
 **Infos MJ** : portes secrètes, pièges, numéros et textes « MJ » n'apparaissent pas dans l'image des joueurs (touche `P` pour prévisualiser).
 
 **Styles** : 10 thèmes (Parchemin, Encre & papier, Pierre sombre, Caverne, Plan d'architecte, Plein air, Ruines sylvestres, Glacier, Forge infernale, Néon) et toutes les couleurs personnalisables.
@@ -39,8 +45,8 @@ Le travail est **sauvegardé automatiquement** dans le navigateur. `Ctrl+S` tél
 - **Donjon** : salles dispersées ou compactes, couloirs, boucles, portes, salles rondes / en croix / à colonnes, eau. Une ambiance (crypte, forteresse, temple, repaire) décide du mobilier de chaque salle.
 - **Grotte** : automate cellulaire, tunnels, eau et lave, stalagmites, cristaux lumineux.
 - **Labyrinthe** : murs pleins ou fins, salles, culs-de-sac réglables, trésors et pièges.
-- **Forêt** : sentier sinueux et embranchements, ruisseau avec pont, clairière avec campement, ruines, version hivernale.
-- **Village / ville** : rues, place centrale avec puits ou fontaine, maisons, taverne, forge, échoppes, chapelle, granges, intérieurs meublés, portes et fenêtres, champs clôturés, rivière et ponts, lanternes ; rues pavées et étals en mode ville.
+- **Forêt** : sentier sinueux et embranchements, ruisseau avec pont, clairière avec campement, ruines, version hivernale, cimes des arbres en toits.
+- **Village / ville** : rues, place centrale avec puits ou fontaine, maisons, taverne, forge, échoppes, chapelle, granges, intérieurs meublés, portes et fenêtres, **toits**, champs clôturés, rivière et ponts, lanternes ; rues pavées et étals en mode ville.
 
 ![Générateur](docs/generateur.jpg)
 
@@ -48,21 +54,24 @@ Le travail est **sauvegardé automatiquement** dans le navigateur. `Ctrl+S` tél
 
 | Format | Contenu |
 | --- | --- |
-| **Foundry VTT** (`.foundry.json`) | Un seul fichier : images de chaque niveau, murs, portes, fenêtres, lumières, **objets séparés en tuiles** (coffres, tonneaux, caisses… déplaçables ou masquables), notes MJ en dessins cachés. S'importe avec le module **Eugéa Importer**. |
+| **Foundry VTT** (`.foundry.json`) | Un seul fichier, tout est posé à l'import : images de chaque niveau, murs, portes, fenêtres, lumières, **objets séparés et toits en tuiles**, étages, notes MJ en dessins cachés. S'importe avec le module **[Eugéa Importer](https://github.com/AlexisRodenas/eugea-importer)**. |
 | **Universal VTT** (`.dd2vtt`) | Pour le module *Universal Battlemap Importer* et les autres VTT compatibles. Un fichier par niveau. |
-| **Image** (WebP / PNG / JPEG) | Impression, Roll20, Owlbear, Discord… Version joueurs ou MJ. |
+| **Image** (WebP / PNG / JPEG) | Impression, Roll20, Owlbear, Discord… Version joueurs ou MJ, avec ou sans les toits. |
 | **Scènes JSON + images** (`.zip`) | Sans module : à décompresser dans `Data/`, puis *Importer des données* sur une scène. |
 
-**Étages dans Foundry** : sur Foundry **V14**, une carte à plusieurs étages devient une seule scène avec des **niveaux natifs**, et les escaliers sont reliés par des zones « Changer de niveau ». Sur V11–V13, ou si vous le choisissez dans les réglages du module, chaque étage devient une scène, regroupées dans un dossier et accessibles depuis la barre de navigation.
+**Étages dans Foundry** : sur Foundry **V14**, une carte à plusieurs étages devient une seule scène avec des **niveaux natifs**, et les escaliers sont reliés par des zones « Changer de niveau ». Sur V11 à V13, ou si vous le choisissez dans les réglages du module, chaque étage devient une scène, regroupées dans un dossier et accessibles depuis la barre de navigation.
 
 ### Installer le module Eugéa Importer
 
+Le module a son propre dépôt : **[AlexisRodenas/eugea-importer](https://github.com/AlexisRodenas/eugea-importer)**.
+
 1. Dans Foundry : *Modules complémentaires → Installer un module*.
-2. Collez le lien du `module.json` de la dernière [Release](../../releases) (clic droit sur `module.json` → copier le lien), puis *Installer*.
+2. Collez ce lien de manifeste, puis *Installer* :
+   ```
+   https://github.com/AlexisRodenas/eugea-importer/releases/latest/download/module.json
+   ```
 3. Activez **Eugéa Importer** dans votre monde.
 4. Onglet **Scènes** → **Importer une carte Eugéa** → choisissez le fichier `.foundry.json`.
-
-Le module envoie les images dans `Data/eugea/`, crée la scène (grille, murs, portes, lumières, tuiles, dessins MJ), génère la miniature et ouvre la carte. Compatible Foundry v11 à v14.
 
 ## Raccourcis
 
@@ -75,7 +84,7 @@ Le module envoie les images dans `Data/eugea/`, crée la scène (grille, murs, p
 | `Alt` | Placement libre (hors grille) |
 | `[` `]` | Taille du pinceau |
 | `Page ↑` / `Page ↓` | Niveau supérieur / inférieur |
-| `G` / `P` / `I` / `0` | Grille / vue joueurs / aperçu de l'éclairage / recadrer |
+| `G` / `P` / `I` / `K` / `0` | Grille / vue joueurs / aperçu de l'éclairage / voir à travers les toits / recadrer |
 | `Ctrl+Z` `Ctrl+Y` `Ctrl+S` `Ctrl+G` `Ctrl+E` | Annuler, rétablir, enregistrer, générer, exporter |
 
 ## Développement
@@ -87,15 +96,15 @@ npm run check    # vérification TypeScript
 npm run build    # dist/index.html autonome (un seul fichier)
 ```
 
-Code dans `src/` : `model.ts` (carte, niveaux), `geometry.ts` (contours, lissage, hachures), `render.ts` (rendu Canvas), `lighting.ts` (visibilité), `props.ts` (objets), `generators/` (donjon, grotte, labyrinthe, forêt, village), `export.ts` (Foundry, Universal VTT, image), `app.ts` et `tools.ts` (interface). Le module Foundry est dans `foundry-module/eugea-importer`.
+Code dans `src/` : `model.ts` (carte, niveaux), `geometry.ts` (contours, lissage, hachures), `render.ts` (rendu Canvas), `lighting.ts` (visibilité), `props.ts` (objets et toits), `assets.ts` (images personnelles), `generators/` (donjon, grotte, labyrinthe, forêt, village), `export.ts` (Foundry, Universal VTT, image), `app.ts` et `tools.ts` (interface).
 
-**Publier une version** : `git tag v1.0.0 && git push --tags`. Le workflow *Release* construit `eugea.html`, le zip du module et son `module.json` (liens de manifeste remplis automatiquement). Le workflow *Pages* publie l'éditeur à chaque push sur `main` (à activer une fois dans *Settings → Pages → Source : GitHub Actions*).
+Les contributions sont les bienvenues : ouvrez une [issue](https://github.com/AlexisRodenas/eugea-map-maker/issues) pour signaler un bug ou proposer une idée.
 
 ---
 
 ### English
 
-Eugéa is a browser-based TTRPG battle map editor: dungeons, caves, mazes, forests, villages and towns, multi-floor, with one-click export to Foundry VTT (walls, doors, lights, separate object tiles, native Scene Levels on V14). Install the **Eugéa Importer** module with the `module.json` link from the latest release, then use *Scenes → Import an Eugéa map*. The interface is in French.
+Eugéa is a browser-based TTRPG battle map editor: dungeons, caves, mazes, forests, villages and towns, multi-floor, with your own image folder (assets can also replace the built-in drawings) and roofs that fade when tokens walk under them. Export to Foundry VTT is fully set up: walls, doors, lights, separate object tiles, roof tiles and native Scene Levels on V14. Try it at [alexisrodenas.github.io/eugea-map-maker](https://alexisrodenas.github.io/eugea-map-maker/), and install the [Eugéa Importer](https://github.com/AlexisRodenas/eugea-importer) module with the manifest link above. The interface is in French.
 
 ## Licence
 

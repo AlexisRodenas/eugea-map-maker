@@ -1,5 +1,5 @@
 import { DungeonMap, EDGE, T } from '../model';
-import { Rng, fbm, hashString } from '../util';
+import { Rng, fbm, hashString, uid } from '../util';
 import { Dresser, RoomInfo, RoomType } from './dressing';
 import { Placer, distField, wobblyLine } from './outdoor';
 
@@ -16,6 +16,7 @@ export interface VillageParams {
   interiors: number;
   lights: number;
   names: boolean;
+  roofs: boolean; // toits (tuiles Foundry au-dessus des jetons)
 }
 
 export const DEFAULT_VILLAGE: VillageParams = {
@@ -31,6 +32,7 @@ export const DEFAULT_VILLAGE: VillageParams = {
   interiors: 0.8,
   lights: 0.5,
   names: true,
+  roofs: true,
 };
 
 type Kind = 'maison' | 'taverne' | 'forge' | 'echoppe' | 'chapelle' | 'grange' | 'entrepot';
@@ -52,6 +54,23 @@ interface Building {
   d: number; // profondeur
   front: number; // côté donnant sur la rue : 0=N 1=E 2=S 3=O
   kind: Kind;
+}
+
+function roofKind(kind: Kind, town: boolean, rng: Rng): string {
+  switch (kind) {
+    case 'chapelle':
+    case 'forge':
+      return 'roofSlate';
+    case 'taverne':
+    case 'echoppe':
+      return town ? 'roofTiles' : rng.pick(['roofTiles', 'roofShingle']);
+    case 'grange':
+      return town ? 'roofShingle' : 'roofThatch';
+    case 'entrepot':
+      return 'roofShingle';
+    default:
+      return town ? rng.pick(['roofTiles', 'roofTiles', 'roofSlate']) : rng.pick(['roofThatch', 'roofThatch', 'roofShingle']);
+  }
 }
 
 export function generateVillage(p: VillageParams): DungeonMap {
@@ -441,6 +460,16 @@ export function generateVillage(p: VillageParams): DungeonMap {
       P.put(kind, x, y, cart ? (side % 2 ? 0 : 90) : rng.int(0, 3) * 90);
     }
   }
+
+  // --- Toits : un par bâtiment, léger débord pour couvrir les murs
+  if (p.roofs)
+    for (const b of buildings) {
+      const horiz = b.front === 0 || b.front === 2;
+      const bw = horiz ? b.w : b.d,
+        bh = horiz ? b.d : b.w;
+      const kind = roofKind(b.kind, p.town, rng);
+      map.props.push({ id: uid(), kind, x: b.x + bw / 2, y: b.y + bh / 2, w: bw + 0.3, h: bh + 0.3, rot: 0, gmOnly: false });
+    }
 
   // --- Arbres et buissons sur l'herbe libre (plus denses vers les bords)
   for (let y = 0; y < rows; y++)

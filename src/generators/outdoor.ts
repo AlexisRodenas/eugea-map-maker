@@ -100,10 +100,11 @@ export class Placer {
   }
 
   /** Pose un objet si son empreinte est libre (ou `force`) ; marque l'occupation. */
-  put(kind: string, x: number, y: number, rot = 0, opt: { w?: number; h?: number; force?: boolean; gmOnly?: boolean; mark?: boolean } = {}): Prop | null {
+  put(kind: string, x: number, y: number, rot = 0, opt: { w?: number; h?: number; force?: boolean; gmOnly?: boolean; mark?: boolean; roof?: boolean } = {}): Prop | null {
     const def = PROP_BY_KIND[kind];
     if (!def) return null;
     const p: Prop = { id: uid(), kind, x, y, w: opt.w ?? def.w, h: opt.h ?? def.h, rot, gmOnly: opt.gmOnly ?? !!def.gmOnly };
+    if (opt.roof) p.roof = true;
     const b = propBounds(p);
     const x0 = Math.floor(b.x0 + 0.05),
       y0 = Math.floor(b.y0 + 0.05),

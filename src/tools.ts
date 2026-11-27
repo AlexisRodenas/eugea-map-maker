@@ -1,6 +1,9 @@
 import type { App } from './app';
 import { EDGE, EDGE_NAMES, FLOOR_TERRAINS, GROUND_TERRAINS, LIGHT_ANIMS, LightAnim, Prop, T, TerrainDef } from './model';
 import { PROPS, PROP_BY_KIND, PROP_CATS, drawProp, propBounds } from './props';
+import { library } from './assets';
+import { libraryView } from './library-panel';
+import { autoRoofs } from './roofs';
 import { button, checkbox, colorInput, field, h, range, section, segmented, select } from './ui';
 import { uid } from './util';
 
@@ -43,6 +46,13 @@ export interface ToolOpts {
   propKind: string;
   propRot: number;
   propGm: boolean;
+  propRoof: boolean;
+  propTile: boolean;
+  /** Image personnelle choisie (objets « image ») et sa taille en cases. */
+  propAsset: string;
+  propAssetPath: string;
+  propAssetW: number;
+  propAssetH: number;
   lightRadius: number;
   lightColor: string;
   lightIntensity: number;
@@ -69,6 +79,12 @@ export function defaultToolOpts(): ToolOpts {
     propKind: 'pillar',
     propRot: 0,
     propGm: false,
+    propRoof: false,
+    propTile: false,
+    propAsset: '',
+    propAssetPath: '',
+    propAssetW: 1,
+    propAssetH: 1,
     lightRadius: 6,
     lightColor: '#ffb066',
     lightIntensity: 0.8,
@@ -87,6 +103,7 @@ export function defaultToolOpts(): ToolOpts {
 }
 
 const ACCENT = '#4cc2ff';
+const MINE = 'Mes images';
 const ERASE = '#ff5a5a';
 
 // ---------- Sélecteur de terrain ----------
@@ -763,7 +780,8 @@ export function createTools(app: App): Tool[] {
   // --- Objets
   const prop = (() => {
     let ghost: Prop | null = null;
-    let cat = PROP_CATS[0];
+    let cat = PROP_BY_KIND[opts.propKind]?.cat || (opts.propKind === 'image' ? MINE : PROP_CATS[0]);
+    let area: { x0: number; y0: number; x1: number; y1: number } | null = null;
     const snapPos = (p: { wx: number; wy: number; alt: boolean }, pr: Prop) => {
       const b = propBounds({ ...pr, x: 0, y: 0 });
       const fw = b.x1 - b.x0,
@@ -774,18 +792,49 @@ export function createTools(app: App): Tool[] {
         sy = step(fh);
       return { x: Math.round((p.wx - fw / 2) / sx) * sx + fw / 2, y: Math.round((p.wy - fh / 2) / sy) * sy + fh / 2 };
     };
+    /** Objet à poser (avant position). */
+    const template = (): Prop => {
+      const image = opts.propKind === 'image' && opts.propAsset;
+      const def = PROP_BY_KIND[image ? 'image' : opts.propKind] ?? PROP_BY_KIND.pillar;
+      const g: Prop = {
+        id: 'ghost',
+        kind: def.kind,
+        x: 0,
+        y: 0,
+        w: image ? opts.propAssetW : def.w,
+        h: image ? opts.propAssetH : def.h,
+        rot: opts.propRot,
+        gmOnly: opts.propGm || !!def.gmOnly,
+      };
+      if (image) g.asset = opts.propAsset;
+      if (opts.propRoof && !def.roof) g.roof = true;
+      if (opts.propTile && !def.tile) g.tile = true;
+      return g;
+    };
     const makeGhost = (p: { wx: number; wy: number; alt: boolean }) => {
-      const def = PROP_BY_KIND[opts.propKind];
-      const g: Prop = { id: 'ghost', kind: def.kind, x: 0, y: 0, w: def.w, h: def.h, rot: opts.propRot, gmOnly: opts.propGm || !!def.gmOnly };
+      const g = template();
       Object.assign(g, snapPos(p, g));
       return g;
+    };
+    const isArea = () => opts.propKind !== 'image' && !!PROP_BY_KIND[opts.propKind]?.area;
+    /** Rectangle glissé -> objet (toits : léger débord pour couvrir les murs). */
+    const areaProp = (): Prop | null => {
+      if (!area) return null;
+      const x0 = Math.min(area.x0, area.x1),
+        x1 = Math.max(area.x0, area.x1),
+        y0 = Math.min(area.y0, area.y1),
+        y1 = Math.max(area.y0, area.y1);
+      if (x1 - x0 < 1 || y1 - y0 < 1) return null;
+      const g = template();
+      const ov = g.kind.startsWith('roof') ? 0.15 : 0;
+      return { ...g, x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0 + 2 * ov, h: y1 - y0 + 2 * ov, rot: 0 };
     };
     const tool: Tool = {
       id: 'prop',
       name: 'Objets',
       key: 'o',
       icon: 'prop',
-      hint: 'Clic : poser · Q ou Maj+molette : pivoter · Alt : placement libre · Clic droit : supprimer l’objet survolé',
+      hint: 'Clic : poser · Toits : glisser pour couvrir une zone · Q ou Maj+molette : pivoter · Alt : placement libre · Clic droit : supprimer l’objet survolé',
       down(p) {
         if (p.button === 2) {
           const id = app.hitTest(p.wx, p.wy, ['prop']);
@@ -796,12 +845,28 @@ export function createTools(app: App): Tool[] {
           }
           return;
         }
+        if (opts.propKind === 'image' && !opts.propAsset) {
+          app.toast('Choisissez d’abord une image dans « Mes images ».');
+          return;
+        }
+        if (isArea()) {
+          area = { x0: Math.round(p.wx), y0: Math.round(p.wy), x1: Math.round(p.wx), y1: Math.round(p.wy) };
+          ghost = null;
+          app.requestRender();
+          return;
+        }
         const g = makeGhost(p);
         app.edit();
         app.map.props.push({ ...g, id: uid() });
         app.changed(false);
       },
       move(p, dragging) {
+        if (area) {
+          area.x1 = Math.round(p.wx);
+          area.y1 = Math.round(p.wy);
+          app.requestRender();
+          return;
+        }
         ghost = makeGhost(p);
         if (dragging && p.button === 0 && p.shift) {
           // Maj + glisser : peindre des objets
@@ -813,15 +878,26 @@ export function createTools(app: App): Tool[] {
         }
         app.requestRender();
       },
+      up(p) {
+        if (!area) return;
+        const r = areaProp() ?? makeGhost(p);
+        area = null;
+        app.edit();
+        app.map.props.push({ ...r, id: uid() });
+        app.changed(false);
+      },
       overlay(ctx) {
-        if (!ghost || !app.hover) return;
+        const r = area ? areaProp() : ghost && app.hover ? ghost : null;
+        if (!r) return;
+        if (area) app.overlayText(`${Math.abs(area.x1 - area.x0)} × ${Math.abs(area.y1 - area.y0)}`, r.x + r.w / 2, r.y - r.h / 2);
         ctx.save();
         ctx.globalAlpha = 0.65;
-        drawProp(ctx, ghost, app.theme.pal);
+        drawProp(ctx, r, app.theme.pal, app.map.settings.skins);
         ctx.restore();
       },
       deactivate() {
         ghost = null;
+        area = null;
       },
       onKey(e) {
         if (e.key === 'q' || e.key === 'Q') {
@@ -840,9 +916,25 @@ export function createTools(app: App): Tool[] {
         return true;
       },
       panel: () => {
-        const grid = h('div', { class: 'prop-grid' });
-        const fillGrid = () => {
-          grid.innerHTML = '';
+        const content = h('div', {});
+        const fill = () => {
+          content.innerHTML = '';
+          if (cat === MINE) {
+            content.append(
+              libraryView(app, opts.propAssetPath, (a, e) => {
+                const s = library.sizeOf(a);
+                opts.propKind = 'image';
+                opts.propAsset = a.id;
+                opts.propAssetPath = e.path;
+                opts.propAssetW = s.w;
+                opts.propAssetH = s.h;
+                if (app.hover) ghost = makeGhost({ wx: app.hover.wx, wy: app.hover.wy, alt: false });
+                app.requestRender();
+              }),
+            );
+            return;
+          }
+          const grid = h('div', { class: 'prop-grid' });
           for (const def of PROPS.filter((d) => d.cat === cat)) {
             const cv = h('canvas', { width: 96, height: 96 });
             app.drawThumb(cv, def.kind);
@@ -854,20 +946,32 @@ export function createTools(app: App): Tool[] {
             });
             grid.append(b);
           }
+          content.append(grid);
+          if (cat === 'Toits')
+            content.append(
+              h('p', { class: 'help' }, 'Glisser pour couvrir une zone. Les toits passent au-dessus des jetons dans Foundry et s’effacent quand un jeton entre dessous. Touche K : voir à travers les toits.'),
+              button('Couvrir chaque bâtiment d’un toit', () => {
+                const kind = PROP_BY_KIND[opts.propKind]?.roof && opts.propKind.startsWith('roof') ? opts.propKind : 'roofThatch';
+                app.edit();
+                const n = autoRoofs(app.map, kind);
+                app.changed(false);
+                app.toast(n ? `${n} toit(s) ajouté(s).` : 'Aucun bâtiment sans toit sur ce niveau.', n ? 'ok' : 'info');
+              }, 'small', 'Ajoute un toit sur chaque groupe de salles séparé (niveau courant), avec le matériau choisi'),
+            );
         };
-        fillGrid();
+        fill();
         const tabs = segmented<string>(
-          PROP_CATS.map((c) => [c, c] as [string, string]),
+          [...PROP_CATS.map((c) => [c, c] as [string, string]), [MINE, MINE]],
           cat,
           (v) => {
             cat = v;
-            fillGrid();
+            fill();
           },
         );
         tabs.classList.add('wrap');
         return section('Objets', [
           tabs,
-          grid,
+          content,
           field(
             'Rotation',
             segmented<number>(
@@ -881,7 +985,9 @@ export function createTools(app: App): Tool[] {
               (v) => (opts.propRot = v),
             ),
           ),
-          checkbox('Visible MJ uniquement', opts.propGm, (v) => (opts.propGm = v), 'Absent de l’image joueurs ; exporté en dessin caché dans Foundry'),
+          checkbox('Visible MJ uniquement', opts.propGm, (v) => (opts.propGm = v), 'Absent de l’image joueurs ; exporté en tuile cachée dans Foundry'),
+          checkbox('Poser en toit (au-dessus des jetons)', opts.propRoof, (v) => (opts.propRoof = v), 'Cimes d’arbres, auvents, ponts… : tuile Foundry au-dessus des jetons, qui s’efface quand un jeton passe dessous'),
+          checkbox('Objet séparé (tuile Foundry)', opts.propTile, (v) => (opts.propTile = v), 'Déplaçable, masquable ou supprimable dans Foundry (coffre pillé, caisse…). Les coffres, tonneaux et caisses le sont déjà par défaut.'),
         ]);
       },
     };

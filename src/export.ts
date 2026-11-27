@@ -3,7 +3,8 @@ import { Renderer } from './render';
 import { resolveTheme } from './themes';
 import { Seg, simplify, wallSegments } from './geometry';
 import { allLights, propBlockers } from './lighting';
-import { PROP_BY_KIND, drawProp, isTile, propBounds } from './props';
+import { PROP_BY_KIND, assetBox, drawProp, isRoof, isTile, propAsset, propBounds } from './props';
+import { assetImage } from './assets';
 import { slugify, toHex } from './util';
 
 export type ImageFormat = 'webp' | 'png' | 'jpeg';
@@ -37,6 +38,8 @@ export interface ImageOpts {
   lighting: boolean;
   /** Les objets "séparés" ne sont pas dessinés dans l'image (ils deviennent des tuiles). */
   separateTiles: boolean;
+  /** Dessiner les toits dans l'image (jamais pour Foundry : ce sont des tuiles). */
+  roofs: boolean;
 }
 
 export function renderLevelImage(map: DungeonMap, index: number, crop: Crop, o: ImageOpts): HTMLCanvasElement {
@@ -56,7 +59,7 @@ export function renderLevelImage(map: DungeonMap, index: number, crop: Crop, o: 
     mode: o.mode,
     grid: o.grid,
     lighting: o.lighting,
-    bakeProp: o.separateTiles ? (p) => !isTile(p) : undefined,
+    bakeProp: (p) => (!o.separateTiles || !isTile(p)) && (o.roofs || !isRoof(p)),
   });
   return canvas;
 }
@@ -86,12 +89,21 @@ export function blobToBase64(blob: Blob): Promise<string> {
 
 // ---------- Objets séparés (tuiles) ----------
 
-/** Objets exportés en tuiles : ceux marqués « séparés » et ceux réservés au MJ (tuiles cachées). */
+/** Objets exportés en tuiles : séparés, toits, et ceux réservés au MJ (tuiles cachées). */
 export function tileProps(view: DungeonMap): Prop[] {
   return view.props.filter((p) => isTile(p) || p.gmOnly);
 }
 
-export function propImageKey(p: Prop): string {
+/** Image personnelle (chargée) dessinée pour cet objet, ou null. */
+export function tileAsset(view: DungeonMap, p: Prop): string | null {
+  const id = propAsset(p, view.settings.skins);
+  return id && assetImage(id) ? id : null;
+}
+
+/** Clé de l'image d'une tuile : l'image personnelle d'origine, ou un rendu de l'objet. */
+export function propImageKey(p: Prop, view?: DungeonMap): string {
+  const aid = view ? tileAsset(view, p) : null;
+  if (aid) return 'asset-' + aid;
   const rand = PROP_BY_KIND[p.kind]?.rand ? '-' + p.id : '';
   return slugify(`${p.kind}-${p.w}x${p.h}${rand}`);
 }
@@ -106,7 +118,7 @@ export function renderPropImage(map: DungeonMap, p: Prop, ppg: number): HTMLCanv
   cv.height = H;
   const ctx = cv.getContext('2d')!;
   ctx.setTransform(ppg, 0, 0, ppg, W / 2, H / 2);
-  drawProp(ctx, { ...p, x: 0, y: 0, rot: 0 }, theme.pal);
+  drawProp(ctx, { ...p, x: 0, y: 0, rot: 0 }, theme.pal, map.settings.skins);
   return cv;
 }
 
@@ -202,18 +214,53 @@ export function foundryDrawings(view: DungeonMap, crop: Crop, ppg: number): Reco
   return out;
 }
 
-/** Tuiles : l'image est désignée par une clé (`image`), remplacée par un chemin à l'import. */
+/**
+ * Tuiles : l'image est désignée par une clé (`image`), remplacée par un chemin à l'import.
+ * `roof` : toit (au-dessus des jetons, s'efface quand un jeton passe dessous) ; le module
+ * traduit ce drapeau dans le format de la version de Foundry.
+ */
 export function foundryTiles(view: DungeonMap, crop: Crop, ppg: number): Record<string, unknown>[] {
-  return tileProps(view).map((p) => ({
-    x: Math.round((p.x - p.w / 2 - crop.x) * ppg),
-    y: Math.round((p.y - p.h / 2 - crop.y) * ppg),
-    width: Math.round(p.w * ppg),
-    height: Math.round(p.h * ppg),
-    rotation: p.rot,
-    hidden: p.gmOnly,
-    image: propImageKey(p),
-    flags: { eugea: { kind: p.kind, name: PROP_BY_KIND[p.kind]?.name ?? p.kind } },
-  }));
+  return tileProps(view).map((p) => {
+    const aid = tileAsset(view, p);
+    const a = aid ? assetImage(aid) : null;
+    const b = a ? assetBox(p, a) : { w: p.w, h: p.h };
+    return {
+      x: Math.round((p.x - b.w / 2 - crop.x) * ppg),
+      y: Math.round((p.y - b.h / 2 - crop.y) * ppg),
+      width: Math.max(1, Math.round(b.w * ppg)),
+      height: Math.max(1, Math.round(b.h * ppg)),
+      rotation: p.rot,
+      hidden: p.gmOnly,
+      roof: isRoof(p),
+      image: propImageKey(p, view),
+      flags: { eugea: { kind: p.kind, name: a && p.kind === 'image' ? a.name : (PROP_BY_KIND[p.kind]?.name ?? p.kind) } },
+    };
+  });
+}
+
+/**
+ * Tuile pour un import sans module (version de Foundry inconnue) : les champs « toit »
+ * de la v11 (overhead, roof) et de la v12+ (élévation, occlusion, restrictions) sont tous
+ * présents ; Foundry ignore ceux qu'il ne connaît pas.
+ */
+export function staticTile(tile: Record<string, unknown>, roofElevation: number): Record<string, unknown> {
+  const { image: _image, roof, ...t } = tile;
+  if (!roof) return t;
+  return {
+    ...t,
+    overhead: true,
+    roof: true,
+    z: 500,
+    elevation: roofElevation,
+    sort: 500,
+    occlusion: { mode: 2, modes: [1], alpha: 0 },
+    restrictions: { light: true, weather: true },
+  };
+}
+
+/** Élévation des toits au-dessus du sol d'un niveau (sous le plafond). */
+export function roofElevation(map: DungeonMap): number {
+  return +(levelHeight(map) * 0.9).toFixed(2);
 }
 
 /** Zones d'escaliers (pour relier les niveaux natifs de Foundry V14). */
@@ -259,8 +306,9 @@ export function foundryBaseScene(map: DungeonMap, crop: Crop, ppg: number, found
     globalLight: false,
     darkness,
     environment: { darknessLevel: darkness, globalLight: { enabled: false } },
+    foregroundElevation: roofElevation(map),
     initial: null,
-    flags: { eugea: { version: 2, cols: crop.w, rows: crop.h } },
+    flags: { eugea: { version: 3, cols: crop.w, rows: crop.h } },
   };
 }
 

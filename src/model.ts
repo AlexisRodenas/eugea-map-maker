@@ -124,6 +124,8 @@ export interface Prop {
   gmOnly: boolean; // invisible dans l'image joueurs
   noLight?: boolean; // désactive la lumière émise par l'objet (brasero, torche...)
   tile?: boolean; // exporté comme tuile séparée dans Foundry (défaut : selon le type d'objet)
+  roof?: boolean; // « toit » : au-dessus des jetons, s'efface quand un jeton passe dessous (défaut : selon le type)
+  asset?: string; // image personnelle (objets de type « image »)
 }
 
 export type LightAnim = 'none' | 'torch' | 'flame' | 'pulse' | 'fog' | 'ghost' | 'fairy' | 'energy';
@@ -169,6 +171,8 @@ export interface MapSettings {
   gridUnits: string;
   showGrid: boolean;
   darkness: number; // 0..1 (Foundry + aperçu)
+  /** Images personnelles dessinées à la place d'un objet intégré (type -> variantes). */
+  skins: Record<string, string[]>;
 }
 
 export function defaultSettings(): MapSettings {
@@ -180,6 +184,7 @@ export function defaultSettings(): MapSettings {
     gridUnits: 'm',
     showGrid: true,
     darkness: 0.6,
+    skins: {},
   };
 }
 
@@ -564,6 +569,7 @@ export class DungeonMap {
     const m = new DungeonMap(d.cols, d.rows);
     m.name = d.name || 'Carte';
     m.settings = { ...defaultSettings(), ...(d.settings || {}) };
+    if (!m.settings.skins || typeof m.settings.skins !== 'object') m.settings.skins = {};
     const fill = (target: Uint8Array, b64: string | undefined, what: string) => {
       if (!b64) return;
       const bytes = base64ToBytes(b64);
@@ -590,6 +596,14 @@ export class DungeonMap {
     m.cur = d.format === 'eugea-map' ? Math.max(0, Math.min(m.levels.length - 1, d.current ?? 0)) : 0;
     m.touchAll();
     return m;
+  }
+
+  /** Identifiants des images personnelles utilisées (objets et habillages). */
+  usedAssets(): string[] {
+    const ids = new Set<string>();
+    for (const l of this.levels) for (const p of l.props) if (p.asset) ids.add(p.asset);
+    for (const list of Object.values(this.settings.skins || {})) for (const id of list) ids.add(id);
+    return [...ids];
   }
 
   /** Copie complète. */
@@ -628,6 +642,14 @@ export interface SavedMap {
   current: number;
   settings: MapSettings;
   levels: SavedLevel[];
+  /** Images personnelles intégrées au fichier (absentes de la sauvegarde automatique). */
+  assets?: Record<string, SavedAsset>;
+}
+
+export interface SavedAsset {
+  name: string;
+  mime: string;
+  data: string; // base64
 }
 
 /** Ancien format v1 (un seul niveau), toujours lisible. */
