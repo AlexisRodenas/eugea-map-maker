@@ -1,4 +1,4 @@
-import { T, TERRAINS } from './model';
+import { MapSettings, T, TERRAINS } from './model';
 import { darken, lighten, luminance, mix } from './util';
 
 export type HatchStyle = 'clusters' | 'lines' | 'dots' | 'none';
@@ -369,4 +369,12 @@ export function resolveTheme(id: string, overrides: Record<string, string> = {})
     accent: t.accent,
   };
   return { ...t, terrain, terrainDetail, pal, dark };
+}
+
+/** Thème d'une carte : thème choisi + couleurs personnalisées + effets autour des murs. */
+export function mapTheme(s: MapSettings): ResolvedTheme {
+  const t = resolveTheme(s.theme, s.colors);
+  if (s.wallFx === false) return { ...t, hatchStyle: 'none', shadowWidth: 0 };
+  if (s.hatch && s.hatch !== 'auto') return { ...t, hatchStyle: s.hatch };
+  return t;
 }

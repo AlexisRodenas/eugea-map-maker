@@ -8,7 +8,7 @@ import { DEFAULT_FOREST, ForestParams, generateForest } from '../generators/fore
 import { DEFAULT_VILLAGE, VillageParams, generateVillage } from '../generators/village';
 import { FLAVORS } from '../generators/dressing';
 import { PROP_BY_KIND } from '../props';
-import { resolveTheme } from '../themes';
+import { mapTheme } from '../themes';
 import { button, checkbox, field, h, modal, range, segmented, select, toast } from '../ui';
 import { randomSeed } from '../util';
 
@@ -98,6 +98,16 @@ const SPECS: Record<Kind, Spec[]> = {
     { key: 'lights', label: 'Lanternes', type: 'pct' },
     { key: 'names', label: 'Noms des bâtiments (MJ)', type: 'bool' },
     { key: 'roofs', label: 'Toits (s’effacent quand on entre, touche K)', type: 'bool' },
+    {
+      key: 'wall',
+      label: 'Enceinte',
+      type: 'select',
+      options: [
+        ['none', 'Aucune'],
+        ['palisade', 'Palissade'],
+        ['stone', 'Muraille de pierre'],
+      ],
+    },
   ],
 };
 
@@ -188,7 +198,7 @@ export function openGenerator(app: App, size?: { cols: number; rows: number }): 
     const scale = Math.min(preview.width / current.cols, preview.height / current.rows);
     const ox = -(preview.width / scale - current.cols) / 2,
       oy = -(preview.height / scale - current.rows) / 2;
-    const theme = resolveTheme(current.settings.theme, current.settings.colors);
+    const theme = mapTheme(current.settings);
     renderer.render(preview.getContext('2d')!, current, theme, {
       view: { scale, ox, oy },
       width: preview.width,

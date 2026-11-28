@@ -8,6 +8,7 @@ import {
   extOf,
   foundryBaseScene,
   foundryLevel,
+  foundryLinks,
   mimeOf,
   propImageKey,
   renderLevelImage,
@@ -50,7 +51,7 @@ const TARGETS: { id: Target; title: string; desc: string; badge?: string }[] = [
     id: 'foundry',
     title: 'Foundry VTT',
     badge: 'Recommandé',
-    desc: 'Un seul fichier, tout est posé à l’import : images des niveaux, murs, portes (verrouillées, secrètes), fenêtres, lumières, objets séparés et toits en tuiles, étages, notes MJ cachées. À importer avec le module « Eugéa Importer ».',
+    desc: 'Un seul fichier, tout est posé à l’import : images des niveaux, murs, portes (verrouillées, secrètes), fenêtres, remparts, lumières, objets séparés et toits en tuiles, étages, escaliers et passages (téléportation), notes MJ cachées. À importer avec le module « Eugéa Importer ».',
   },
   {
     id: 'uvtt',
@@ -61,7 +62,7 @@ const TARGETS: { id: Target; title: string; desc: string; badge?: string }[] = [
   {
     id: 'foundry-json',
     title: 'Foundry — scènes JSON + images',
-    desc: 'Sans module : une archive à décompresser dans Data, puis clic droit sur une scène → « Importer des données ».',
+    desc: 'Sans module : une archive à décompresser dans Data, puis clic droit sur une scène → « Importer des données ». Escaliers et passages ne sont pas reliés (il faut le module).',
   },
 ];
 
@@ -284,11 +285,12 @@ export function openExport(app: App): void {
         await tick();
         const pack = {
           format: 'eugea-scene',
-          version: 3,
+          version: 4,
           name,
           slug,
           scene: foundryBaseScene(map, crop, st.ppg, st.foundryGrid),
           levels: levelsData(),
+          links: foundryLinks(map, crop, st.ppg),
           images,
         };
         downloadBlob(new Blob([JSON.stringify(pack)], { type: 'application/json' }), `${slug}.foundry.json`);

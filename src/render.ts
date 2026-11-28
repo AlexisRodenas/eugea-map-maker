@@ -1,7 +1,8 @@
 import { DungeonMap, EDGE, Prop, T } from './model';
 import { GeoCache, Geometry, Portal, TerrainGeo } from './geometry';
 import { LightingCache, allLights } from './lighting';
-import { drawProp, isRoof, propBounds, propLayer } from './props';
+import { castsShadow, drawProp, isRoof, propBounds, propLayer, shadowOffset } from './props';
+import { drawRamparts, strokeRampartOutline } from './ramparts';
 import type { ResolvedTheme } from './themes';
 import { hash2, luminance, mix, rgba } from './util';
 
@@ -26,6 +27,8 @@ export interface RenderOpts {
   bakeProp?: (p: Prop) => boolean;
   /** Toits : affichés (défaut), estompés pour voir l'intérieur, ou cachés. */
   roofs?: 'show' | 'ghost' | 'hide';
+  /** Passages (éditeur) : niveau affiché, pour marquer leurs extrémités. */
+  passages?: boolean;
 }
 
 // ---------- Texture de papier (tuile périodique) ----------
@@ -83,6 +86,7 @@ export class Renderer {
   private patterns = new WeakMap<CanvasRenderingContext2D, CanvasPattern>();
   private groundPatterns = new WeakMap<CanvasRenderingContext2D, CanvasPattern>();
   private lightLayer: HTMLCanvasElement | null = null;
+  private shadowLayer: HTMLCanvasElement | null = null;
 
   geometry(map: DungeonMap, theme: ResolvedTheme): Geometry {
     return this.geo.get(map, theme);
@@ -111,7 +115,15 @@ export class Renderer {
       if (t.id === T.WATER || t.id === T.DEEP || t.id === T.LAVA) {
         ctx.save();
         ctx.clip(t.fill);
-        ctx.strokeStyle = t.id === T.LAVA ? 'rgba(255,235,150,0.55)' : 'rgba(255,255,255,0.28)';
+        // fondu vers le bord : bandes concentriques de plus en plus larges et transparentes
+        const edge = t.id === T.DEEP ? theme.terrain[T.WATER] : t.id === T.LAVA ? '#ffd27a' : '#e6f3ff';
+        const a = t.id === T.DEEP ? 0.16 : t.id === T.LAVA ? 0.1 : 0.07;
+        ctx.strokeStyle = rgba(edge, a);
+        for (const w of [1.6, 1.1, 0.7, 0.4]) {
+          ctx.lineWidth = w;
+          ctx.stroke(t.fill);
+        }
+        ctx.strokeStyle = t.id === T.LAVA ? 'rgba(255,235,150,0.55)' : 'rgba(255,255,255,0.32)';
         ctx.lineWidth = 0.08;
         ctx.stroke(t.fill);
         ctx.restore();
@@ -206,12 +218,14 @@ export class Renderer {
 
     if (o.grid && theme.gridStyle !== 'none') this.drawGrid(ctx, map, theme, vx0, vy0, vx1, vy1, px);
 
-    // Ombre portée intérieure le long des murs
-    ctx.strokeStyle = theme.shadow;
-    ctx.lineWidth = theme.shadowWidth * 2;
-    ctx.stroke(geo.wallPath);
-    ctx.lineWidth = theme.shadowWidth;
-    ctx.stroke(geo.wallPath);
+    // Ombre portée intérieure le long des murs (désactivable : « effets autour des murs »)
+    if (theme.shadowWidth > 0) {
+      ctx.strokeStyle = theme.shadow;
+      ctx.lineWidth = theme.shadowWidth * 2;
+      ctx.stroke(geo.wallPath);
+      ctx.lineWidth = theme.shadowWidth;
+      ctx.stroke(geo.wallPath);
+    }
     ctx.restore();
 
     // Murs
@@ -227,6 +241,9 @@ export class Renderer {
       if (p.type === EDGE.SECRET && o.mode !== 'player') marks.push(p);
     }
 
+    // Remparts et murailles
+    if (map.ramparts.length) drawRamparts(ctx, map.ramparts, theme, px, { x0: vx0, y0: vy0, x1: vx1, y1: vy1 });
+
     // Objets (les toits en dernier)
     const roofs = o.roofs ?? 'show';
     const skins = map.settings.skins;
@@ -240,7 +257,13 @@ export class Renderer {
       })
       .map((p, i) => [p, propLayer(p), i] as [Prop, number, number])
       .sort((a, b) => a[1] - b[1] || a[2] - b[2]);
+    let shadowsDone = map.settings.shadows === false;
     for (const [p, layer] of props) {
+      if (!shadowsDone && layer >= 1) {
+        // ombres de tous les objets posés, sous eux, en une seule passe floutée
+        this.drawShadows(ctx, props.map((x) => x[0]).filter(castsShadow), theme, o, skins);
+        shadowsDone = true;
+      }
       if (layer === 3 && roofs === 'ghost') {
         ctx.save();
         ctx.globalAlpha = 0.18;
@@ -284,6 +307,19 @@ export class Renderer {
       ctx.globalAlpha = 1;
     }
 
+    // Vignette : bords de la carte assombris
+    const vg = map.settings.vignette ?? 0;
+    if (vg > 0) {
+      const cx = map.cols / 2,
+        cy = map.rows / 2;
+      const R = Math.hypot(map.cols, map.rows) / 2;
+      const g = ctx.createRadialGradient(cx, cy, R * 0.45, cx, cy, R * 1.05);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, `rgba(15,8,2,${0.75 * vg})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(vx0, vy0, vx1 - vx0, vy1 - vy0);
+    }
+
     // Repères "S" des portes secrètes (MJ)
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     if (marks.length && scale > 12) {
@@ -323,6 +359,45 @@ export class Renderer {
 
     // Repères d'édition
     if (o.mode === 'editor') this.drawEditorOverlay(ctx, map, theme, o);
+    ctx.restore();
+  }
+
+  /**
+   * Ombres portées : les objets sont dessinés décalés dans un calque réduit, réduits à leur
+   * silhouette, puis posés flous et transparents sous les objets.
+   */
+  private drawShadows(ctx: CanvasRenderingContext2D, list: Prop[], theme: ResolvedTheme, o: RenderOpts, skins: Record<string, string[]>): void {
+    if (!list.length) return;
+    const { scale, ox, oy } = o.view;
+    const k = Math.min(1, 2048 / Math.max(o.width, o.height));
+    const W = Math.max(1, Math.round(o.width * k)),
+      H = Math.max(1, Math.round(o.height * k));
+    if (!this.shadowLayer) this.shadowLayer = document.createElement('canvas');
+    const layer = this.shadowLayer;
+    if (layer.width !== W || layer.height !== H) {
+      layer.width = W;
+      layer.height = H;
+    }
+    const s = layer.getContext('2d')!;
+    s.setTransform(1, 0, 0, 1, 0, 0);
+    s.globalCompositeOperation = 'source-over';
+    s.clearRect(0, 0, W, H);
+    const sc = scale * k;
+    for (const p of list) {
+      const [dx, dy] = shadowOffset(p);
+      s.setTransform(sc, 0, 0, sc, (dx - ox) * sc, (dy - oy) * sc);
+      drawProp(s, p, theme.pal, skins);
+    }
+    s.setTransform(1, 0, 0, 1, 0, 0);
+    s.globalCompositeOperation = 'source-in';
+    s.fillStyle = '#000';
+    s.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = theme.dark ? 0.5 : 0.3;
+    ctx.filter = `blur(${Math.max(0.6, 0.05 * scale).toFixed(1)}px)`;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(layer, 0, 0, W, H, 0, 0, o.width, o.height);
     ctx.restore();
   }
 
@@ -506,6 +581,55 @@ export class Renderer {
     ctx.restore();
   }
 
+/** Marqueurs des passages (téléportations) dont une extrémité est sur le niveau affiché. */
+  private drawPassageEnds(ctx: CanvasRenderingContext2D, map: DungeonMap, o: RenderOpts): void {
+    const { scale, ox, oy } = o.view;
+    const lid = map.level.id;
+    const names = new Map(map.levels.map((l) => [l.id, l.name]));
+    const sel = o.selection;
+    map.passages.forEach((p, n) => {
+      for (const [end, other] of [
+        [p.a, p.b],
+        [p.b, p.a],
+      ] as const) {
+        if (end.level !== lid) continue;
+        const x = (end.x - ox) * scale,
+          y = (end.y - oy) * scale,
+          hs = (p.size / 2) * scale;
+        const on = sel?.has(p.id);
+        ctx.save();
+        ctx.fillStyle = 'rgba(176,124,255,0.16)';
+        ctx.fillRect(x - hs, y - hs, hs * 2, hs * 2);
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = on ? 3 : 2;
+        ctx.strokeStyle = on ? '#ffffff' : '#b07cff';
+        ctx.strokeRect(x - hs, y - hs, hs * 2, hs * 2);
+        ctx.setLineDash([]);
+        // même niveau : trait vers l'autre extrémité
+        if (other.level === lid) {
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo((other.x - ox) * scale, (other.y - oy) * scale);
+          ctx.strokeStyle = 'rgba(176,124,255,0.55)';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([3, 5]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        const label = `${p.name || 'Passage ' + (n + 1)}${other.level !== lid ? ' → ' + (names.get(other.level) ?? '?') : ''}${p.oneWay && end === p.b ? ' (arrivée)' : ''}`;
+        ctx.font = `600 ${Math.max(11, Math.min(14, scale * 0.3))}px system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(40,20,70,0.85)';
+        ctx.fillRect(x - tw / 2 - 5, y - hs - 21, tw + 10, 18);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(label, x, y - hs - 6);
+        ctx.restore();
+      }
+    });
+  }
+
   private drawEditorOverlay(ctx: CanvasRenderingContext2D, map: DungeonMap, theme: ResolvedTheme, o: RenderOpts): void {
     const { scale, ox, oy } = o.view;
     const sx = (x: number) => (x - ox) * scale;
@@ -522,6 +646,9 @@ export class Renderer {
     ctx.setLineDash([6, 4]);
     ctx.strokeRect(sx(0) + 0.5, sy(0) + 0.5, map.cols * scale, map.rows * scale);
     ctx.restore();
+
+    // Passages : extrémités posées sur ce niveau
+    if (o.passages !== false) this.drawPassageEnds(ctx, map, o);
 
     // Lumières (icônes)
     const sel = o.selection;
@@ -572,6 +699,13 @@ export class Renderer {
         ctx.translate(sx(p.x), sy(p.y));
         ctx.rotate((p.rot * Math.PI) / 180);
         ctx.strokeRect((-p.w / 2) * scale - 3, (-p.h / 2) * scale - 3, p.w * scale + 6, p.h * scale + 6);
+        ctx.restore();
+      }
+      for (const r of map.ramparts) {
+        if (!sel.has(r.id)) continue;
+        ctx.save();
+        ctx.setTransform(scale, 0, 0, scale, -ox * scale, -oy * scale);
+        strokeRampartOutline(ctx, r, '#4cc2ff', 1 / scale);
         ctx.restore();
       }
       for (const l of map.labels) {

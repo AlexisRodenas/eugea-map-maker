@@ -5,7 +5,9 @@ import { library } from './assets';
 import { libraryView } from './library-panel';
 import { autoRoofs } from './roofs';
 import { button, checkbox, colorInput, field, h, range, section, segmented, select } from './ui';
-import { uid } from './util';
+import { Rng, uid } from './util';
+import { passageTool, rampartTool } from './tools-extra';
+import type { RampartStyle } from './model';
 
 export interface PInfo {
   wx: number;
@@ -67,7 +69,44 @@ export interface ToolOpts {
   groundSize: number;
   groundRound: boolean;
   groundFill: boolean;
+  rampartStyle: RampartStyle;
+  rampartWidth: number;
+  rampartTowers: boolean;
+  /** Pinceau de dispersion (objets semés au hasard dans un cercle). */
+  scatter: boolean;
+  scatterRadius: number;
+  scatterDensity: number;
+  scatterSet: ScatterSet;
 }
+
+export type ScatterSet = 'one' | 'forest' | 'undergrowth' | 'rocks' | 'swamp';
+
+/** Mélanges du pinceau de dispersion : [type, poids]. */
+const SCATTER_SETS: Record<Exclude<ScatterSet, 'one'>, [string, number][]> = {
+  forest: [
+    ['tree', 5],
+    ['pine', 3],
+    ['bush', 2],
+  ],
+  undergrowth: [
+    ['bush', 3],
+    ['tuft', 4],
+    ['flowers', 2],
+    ['stump', 1],
+    ['mushrooms', 1],
+  ],
+  rocks: [
+    ['boulder', 3],
+    ['rubble', 4],
+    ['tuft', 1],
+  ],
+  swamp: [
+    ['tuft', 5],
+    ['bush', 2],
+    ['log', 1],
+    ['mushrooms', 2],
+  ],
+};
 
 export function defaultToolOpts(): ToolOpts {
   return {
@@ -99,6 +138,13 @@ export function defaultToolOpts(): ToolOpts {
     groundSize: 3,
     groundRound: true,
     groundFill: false,
+    rampartStyle: 'stone',
+    rampartWidth: 1,
+    rampartTowers: true,
+    scatter: false,
+    scatterRadius: 3,
+    scatterDensity: 0.5,
+    scatterSet: 'one',
   };
 }
 
@@ -275,6 +321,7 @@ export function createTools(app: App): Tool[] {
             for (const o of app.map.props) if (inside(o)) app.selection.add(o.id);
             for (const o of app.map.lights) if (inside(o)) app.selection.add(o.id);
             for (const o of app.map.labels) if (inside(o)) app.selection.add(o.id);
+            for (const o of app.map.ramparts) if (inside(o)) app.selection.add(o.id);
             app.selectionChanged();
           }
           box = null;
@@ -817,6 +864,52 @@ export function createTools(app: App): Tool[] {
       return g;
     };
     const isArea = () => opts.propKind !== 'image' && !!PROP_BY_KIND[opts.propKind]?.area;
+    // --- dispersion
+    const rng = new Rng(Date.now() % 2147483647);
+    let sow: { x: number; y: number } | null = null;
+    let sowErase = false;
+    const scatterKinds = (): string[] => {
+      if (opts.scatterSet === 'one') return [opts.propKind];
+      const list = SCATTER_SETS[opts.scatterSet];
+      return [rng.weighted(list.map(([k, w]) => [k, w] as const))];
+    };
+    const sowedKinds = (): Set<string> => new Set(opts.scatterSet === 'one' ? [opts.propKind] : SCATTER_SETS[opts.scatterSet].map(([k]) => k));
+    /** Sème des objets dans le cercle (x, y), sans chevauchement excessif. */
+    const sowAt = (x: number, y: number) => {
+      const R = opts.scatterRadius;
+      const tries = Math.max(1, Math.round(R * R * opts.scatterDensity * 0.6));
+      const props = app.map.props;
+      let added = 0;
+      for (let k = 0; k < tries; k++) {
+        const a = rng.float(0, Math.PI * 2),
+          d = R * Math.sqrt(rng.next());
+        const px = x + Math.cos(a) * d,
+          py = y + Math.sin(a) * d;
+        if (px < 0 || py < 0 || px > app.map.cols || py > app.map.rows) continue;
+        const kind = scatterKinds()[0];
+        const image = kind === 'image' && opts.propAsset;
+        const def = PROP_BY_KIND[image ? 'image' : kind];
+        if (!def || def.area) continue;
+        const sc = rng.float(0.75, 1.25);
+        const w = (image ? opts.propAssetW : def.w) * sc,
+          h = (image ? opts.propAssetH : def.h) * sc;
+        const r = Math.max(w, h) / 2;
+        const spacing = 0.55 + (1 - opts.scatterDensity) * 0.5;
+        if (props.some((q) => Math.hypot(q.x - px, q.y - py) < (Math.max(q.w, q.h) / 2 + r) * spacing)) continue;
+        const pr: Prop = { id: uid(), kind: def.kind, x: +px.toFixed(3), y: +py.toFixed(3), w: +w.toFixed(3), h: +h.toFixed(3), rot: Math.round(rng.float(0, 360)), gmOnly: opts.propGm };
+        if (image) pr.asset = opts.propAsset;
+        if (opts.propRoof && !def.roof) pr.roof = true;
+        props.push(pr);
+        added++;
+      }
+      if (added) app.changed(false);
+    };
+    const unsowAt = (x: number, y: number) => {
+      const kinds = sowedKinds();
+      const before = app.map.props.length;
+      app.map.props = app.map.props.filter((q) => !(kinds.has(q.kind) && Math.hypot(q.x - x, q.y - y) <= opts.scatterRadius));
+      if (app.map.props.length !== before) app.changed(false);
+    };
     /** Rectangle glissé -> objet (toits : léger débord pour couvrir les murs). */
     const areaProp = (): Prop | null => {
       if (!area) return null;
@@ -836,6 +929,18 @@ export function createTools(app: App): Tool[] {
       icon: 'prop',
       hint: 'Clic : poser · Toits : glisser pour couvrir une zone · Q ou Maj+molette : pivoter · Alt : placement libre · Clic droit : supprimer l’objet survolé',
       down(p) {
+        if (opts.scatter && !isArea()) {
+          if (opts.scatterSet === 'one' && opts.propKind === 'image' && !opts.propAsset) {
+            app.toast('Choisissez d’abord une image dans « Mes images ».');
+            return;
+          }
+          app.edit();
+          sow = { x: p.wx, y: p.wy };
+          sowErase = p.button === 2;
+          if (sowErase) unsowAt(p.wx, p.wy);
+          else sowAt(p.wx, p.wy);
+          return;
+        }
         if (p.button === 2) {
           const id = app.hitTest(p.wx, p.wy, ['prop']);
           if (id) {
@@ -861,6 +966,16 @@ export function createTools(app: App): Tool[] {
         app.changed(false);
       },
       move(p, dragging) {
+        if (opts.scatter && !isArea()) {
+          ghost = null;
+          if (dragging && sow && Math.hypot(p.wx - sow.x, p.wy - sow.y) >= opts.scatterRadius * 0.45) {
+            sow = { x: p.wx, y: p.wy };
+            if (sowErase) unsowAt(p.wx, p.wy);
+            else sowAt(p.wx, p.wy);
+          }
+          app.requestRender();
+          return;
+        }
         if (area) {
           area.x1 = Math.round(p.wx);
           area.y1 = Math.round(p.wy);
@@ -879,6 +994,7 @@ export function createTools(app: App): Tool[] {
         app.requestRender();
       },
       up(p) {
+        sow = null;
         if (!area) return;
         const r = areaProp() ?? makeGhost(p);
         area = null;
@@ -886,7 +1002,20 @@ export function createTools(app: App): Tool[] {
         app.map.props.push({ ...r, id: uid() });
         app.changed(false);
       },
-      overlay(ctx) {
+      overlay(ctx, px) {
+        if (opts.scatter && !isArea()) {
+          if (!app.hover) return;
+          ctx.beginPath();
+          ctx.arc(app.hover.wx, app.hover.wy, opts.scatterRadius, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(76,194,255,0.08)';
+          ctx.fill();
+          ctx.setLineDash([px * 6, px * 4]);
+          ctx.strokeStyle = ACCENT;
+          ctx.lineWidth = px * 1.5;
+          ctx.stroke();
+          ctx.setLineDash([]);
+          return;
+        }
         const r = area ? areaProp() : ghost && app.hover ? ghost : null;
         if (!r) return;
         if (area) app.overlayText(`${Math.abs(area.x1 - area.x0)} × ${Math.abs(area.y1 - area.y0)}`, r.x + r.w / 2, r.y - r.h / 2);
@@ -909,6 +1038,11 @@ export function createTools(app: App): Tool[] {
         return false;
       },
       onWheel(e) {
+        if (opts.scatter && e.altKey) {
+          opts.scatterRadius = Math.max(1, Math.min(12, opts.scatterRadius + (e.deltaY > 0 ? -0.5 : 0.5)));
+          app.requestRender();
+          return true;
+        }
         if (!e.shiftKey) return false;
         opts.propRot = (opts.propRot + (e.deltaY > 0 ? 90 : 270)) % 360;
         if (app.hover) ghost = makeGhost({ wx: app.hover.wx, wy: app.hover.wy, alt: false });
@@ -969,9 +1103,43 @@ export function createTools(app: App): Tool[] {
           },
         );
         tabs.classList.add('wrap');
+        const scatterBox = h('div', { class: 'scatter' + (opts.scatter ? ' on' : '') });
+        const fillScatter = () => {
+          scatterBox.innerHTML = '';
+          scatterBox.append(
+            checkbox('Pinceau de dispersion', opts.scatter, (v) => {
+              opts.scatter = v;
+              fillScatter();
+              scatterBox.classList.toggle('on', v);
+              app.requestRender();
+            }, 'Glisser pour semer des objets au hasard (taille et orientation variées) ; clic droit + glisser pour les retirer'),
+          );
+          if (!opts.scatter) return;
+          scatterBox.append(
+            field(
+              'Semer',
+              select<ScatterSet>(
+                [
+                  ['one', 'L’objet choisi (ou votre image)'],
+                  ['forest', 'Forêt mixte'],
+                  ['undergrowth', 'Sous-bois'],
+                  ['rocks', 'Rocaille'],
+                  ['swamp', 'Marais'],
+                ],
+                opts.scatterSet,
+                (v) => (opts.scatterSet = v),
+              ),
+            ),
+            field('Rayon', range(opts.scatterRadius, 1, 12, 0.5, (v) => (opts.scatterRadius = v), (v) => `${v} cases`)),
+            field('Densité', range(opts.scatterDensity, 0.1, 1, 0.05, (v) => (opts.scatterDensity = v), (v) => `${Math.round(v * 100)}%`)),
+            h('p', { class: 'help' }, 'Glisser : semer · Clic droit + glisser : effacer ce mélange · Alt + molette : rayon'),
+          );
+        };
+        fillScatter();
         return section('Objets', [
           tabs,
           content,
+          scatterBox,
           field(
             'Rotation',
             segmented<number>(
@@ -1141,5 +1309,5 @@ export function createTools(app: App): Tool[] {
     hint: 'Glisser : déplacer la vue (aussi : clic molette, ou Espace + glisser)',
   };
 
-  return [sel, room, makeBrush(false), makeBrush(true), fill, terrain, wall, door, prop, light, text, pan];
+  return [sel, room, makeBrush(false), makeBrush(true), fill, terrain, wall, door, rampartTool(app), prop, light, text, passageTool(app), pan];
 }

@@ -1,9 +1,9 @@
 import { DungeonMap, EDGE, Prop } from './model';
 import { Renderer } from './render';
-import { resolveTheme } from './themes';
+import { mapTheme } from './themes';
 import { Seg, simplify, wallSegments } from './geometry';
-import { allLights, propBlockers } from './lighting';
-import { PROP_BY_KIND, assetBox, drawProp, isRoof, isTile, propAsset, propBounds } from './props';
+import { allLights, obstacleSegments } from './lighting';
+import { PROP_BY_KIND, assetBox, castsShadow, drawProp, isRoof, isTile, propAsset, propBounds, shadowOffset } from './props';
 import { assetImage } from './assets';
 import { slugify, toHex } from './util';
 
@@ -18,6 +18,8 @@ export interface Crop {
 
 export const MAX_SIDE = 16384;
 const STAIRS = new Set(['stairs', 'spiral', 'ladder', 'trapdoor']);
+/** Marge autour des images de tuiles (ombre portée, débords) ; la tuile est agrandie d'autant. */
+export const TILE_MARGIN = 0.3;
 
 /** Zone exportée : contenu de tous les niveaux (pour qu'ils restent superposables). */
 export function computeCrop(map: DungeonMap, crop: boolean, margin: number): Crop {
@@ -52,7 +54,7 @@ export function renderLevelImage(map: DungeonMap, index: number, crop: Crop, o: 
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error("Impossible de créer l'image (mémoire insuffisante ?).");
   const view = map.levelView(index);
-  new Renderer().render(ctx, view, resolveTheme(map.settings.theme, map.settings.colors), {
+  new Renderer().render(ctx, view, mapTheme(map.settings), {
     view: { scale: o.ppg, ox: crop.x, oy: crop.y },
     width: W,
     height: H,
@@ -105,28 +107,57 @@ export function propImageKey(p: Prop, view?: DungeonMap): string {
   const aid = view ? tileAsset(view, p) : null;
   if (aid) return 'asset-' + aid;
   const rand = PROP_BY_KIND[p.kind]?.rand ? '-' + p.id : '';
-  return slugify(`${p.kind}-${p.w}x${p.h}${rand}`);
+  // l'ombre est dessinée dans l'image : son sens dépend de la rotation de la tuile
+  const rot = castsShadow(p) && (!view || view.settings.shadows !== false) ? `-r${Math.round(p.rot)}` : '';
+  return slugify(`${p.kind}-${p.w}x${p.h}${rot}${rand}`);
 }
 
-/** Image d'un objet seul, fond transparent, non pivoté (la rotation est portée par la tuile). */
+/**
+ * Image d'un objet seul, fond transparent, non pivoté (la rotation est portée par la tuile),
+ * avec une marge (TILE_MARGIN) pour son ombre portée et ce qui dépasse de sa boîte.
+ */
 export function renderPropImage(map: DungeonMap, p: Prop, ppg: number): HTMLCanvasElement {
-  const theme = resolveTheme(map.settings.theme, map.settings.colors);
-  const W = Math.max(1, Math.round(p.w * ppg)),
-    H = Math.max(1, Math.round(p.h * ppg));
+  const theme = mapTheme(map.settings);
+  const m = TILE_MARGIN;
+  const W = Math.max(1, Math.round((p.w + 2 * m) * ppg)),
+    H = Math.max(1, Math.round((p.h + 2 * m) * ppg));
   const cv = document.createElement('canvas');
   cv.width = W;
   cv.height = H;
   const ctx = cv.getContext('2d')!;
+  const local = { ...p, x: 0, y: 0, rot: 0 };
+  if (map.settings.shadows !== false && castsShadow(p)) {
+    // ombre calculée dans le repère de l'objet : une fois la tuile pivotée, elle tombe en bas à droite
+    const [dx, dy] = shadowOffset(p);
+    const r = (-p.rot * Math.PI) / 180;
+    const lx = dx * Math.cos(r) - dy * Math.sin(r),
+      ly = dx * Math.sin(r) + dy * Math.cos(r);
+    const sh = document.createElement('canvas');
+    sh.width = W;
+    sh.height = H;
+    const s = sh.getContext('2d')!;
+    s.setTransform(ppg, 0, 0, ppg, W / 2 + lx * ppg, H / 2 + ly * ppg);
+    drawProp(s, local, theme.pal, map.settings.skins);
+    s.setTransform(1, 0, 0, 1, 0, 0);
+    s.globalCompositeOperation = 'source-in';
+    s.fillStyle = '#000';
+    s.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.globalAlpha = theme.dark ? 0.5 : 0.3;
+    ctx.filter = `blur(${Math.max(0.6, 0.05 * ppg).toFixed(1)}px)`;
+    ctx.drawImage(sh, 0, 0);
+    ctx.restore();
+  }
   ctx.setTransform(ppg, 0, 0, ppg, W / 2, H / 2);
-  drawProp(ctx, { ...p, x: 0, y: 0, rot: 0 }, theme.pal, map.settings.skins);
+  drawProp(ctx, local, theme.pal, map.settings.skins);
   return cv;
 }
 
 // ---------- Foundry VTT ----------
 
 function segmentsOf(view: DungeonMap): Seg[] {
-  const geo = new Renderer().geometry(view, resolveTheme(view.settings.theme, view.settings.colors));
-  return wallSegments(geo, 0.08).concat(propBlockers(view));
+  const geo = new Renderer().geometry(view, mapTheme(view.settings));
+  return wallSegments(geo, 0.08).concat(obstacleSegments(view));
 }
 
 export function foundryWalls(view: DungeonMap, crop: Crop, ppg: number): Record<string, unknown>[] {
@@ -223,7 +254,8 @@ export function foundryTiles(view: DungeonMap, crop: Crop, ppg: number): Record<
   return tileProps(view).map((p) => {
     const aid = tileAsset(view, p);
     const a = aid ? assetImage(aid) : null;
-    const b = a ? assetBox(p, a) : { w: p.w, h: p.h };
+    // image d'origine : boîte exacte ; rendu de l'objet : boîte agrandie de la marge
+    const b = a ? assetBox(p, a) : { w: p.w + 2 * TILE_MARGIN, h: p.h + 2 * TILE_MARGIN };
     return {
       x: Math.round((p.x - b.w / 2 - crop.x) * ppg),
       y: Math.round((p.y - b.h / 2 - crop.y) * ppg),
@@ -278,6 +310,84 @@ export function stairZones(view: DungeonMap, crop: Crop, ppg: number): { x: numb
     });
 }
 
+export interface LinkZone {
+  level: string; // identifiant du niveau
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Liaison entre deux zones (téléportation Foundry) : passage posé ou escalier relié à l'étage voisin. */
+export interface FoundryLink {
+  id: string;
+  name: string;
+  kind: 'stairs' | 'passage';
+  oneWay: boolean;
+  a: LinkZone;
+  b: LinkZone;
+}
+
+type Box = { x0: number; y0: number; x1: number; y1: number };
+const overlaps = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+
+/**
+ * Liaisons exportées : les passages posés, puis chaque escalier / échelle / trappe relié à l'étage
+ * voisin au même endroit (au-dessus d'abord, en dessous d'abord pour une trappe). Un escalier
+ * présent aux deux étages ne donne qu'une liaison ; un escalier déjà couvert par un passage est ignoré.
+ */
+export function foundryLinks(map: DungeonMap, crop: Crop, ppg: number): FoundryLink[] {
+  const zone = (level: string, b: Box): LinkZone => ({
+    level,
+    x: Math.round((b.x0 - crop.x) * ppg),
+    y: Math.round((b.y0 - crop.y) * ppg),
+    width: Math.max(1, Math.round((b.x1 - b.x0) * ppg)),
+    height: Math.max(1, Math.round((b.y1 - b.y0) * ppg)),
+  });
+  const endBox = (x: number, y: number, size: number): Box => ({ x0: x - size / 2, y0: y - size / 2, x1: x + size / 2, y1: y + size / 2 });
+  const out: FoundryLink[] = map.passages.map((p) => ({
+    id: p.id,
+    name: p.name,
+    kind: 'passage',
+    oneWay: !!p.oneWay,
+    a: zone(p.a.level, endBox(p.a.x, p.a.y, p.size)),
+    b: zone(p.b.level, endBox(p.b.x, p.b.y, p.size)),
+  }));
+  const covered = (level: string, b: Box) =>
+    map.passages.some((p) => (p.a.level === level && overlaps(b, endBox(p.a.x, p.a.y, p.size))) || (p.b.level === level && overlaps(b, endBox(p.b.x, p.b.y, p.size))));
+  const stairsOf = (i: number) => map.levels[i].props.filter((p) => STAIRS.has(p.kind)).map((p) => ({ p, b: propBounds(p) }));
+  const done = new Set<string>();
+  map.levels.forEach((lv, i) => {
+    for (const { p, b } of stairsOf(i)) {
+      if (done.has(p.id) || covered(lv.id, b)) continue;
+      const order = p.kind === 'trapdoor' ? [i - 1, i + 1] : [i + 1, i - 1];
+      const targets = order.filter((j) => j >= 0 && j < map.levels.length);
+      if (!targets.length) continue;
+      // un escalier au même endroit sur l'étage voisin : on relie les deux
+      let j = targets[0];
+      let other: { p: { id: string }; b: Box } | undefined;
+      for (const t of targets) {
+        other = stairsOf(t).find((o) => !done.has(o.p.id) && overlaps(o.b, b));
+        if (other) {
+          j = t;
+          break;
+        }
+      }
+      done.add(p.id);
+      if (other) done.add(other.p.id);
+      out.push({
+        id: 'stairs-' + p.id,
+        name: PROP_BY_KIND[p.kind]?.name ?? 'Escalier',
+        kind: 'stairs',
+        oneWay: false,
+        a: zone(lv.id, b),
+        b: zone(map.levels[j].id, other ? other.b : b),
+      });
+    }
+  });
+  return out;
+}
+
 /** Hauteur d'un niveau (pour les élévations Foundry), dans l'unité de la grille. */
 export function levelHeight(map: DungeonMap): number {
   const u = map.settings.gridUnits;
@@ -308,7 +418,7 @@ export function foundryBaseScene(map: DungeonMap, crop: Crop, ppg: number, found
     environment: { darknessLevel: darkness, globalLight: { enabled: false } },
     foregroundElevation: roofElevation(map),
     initial: null,
-    flags: { eugea: { version: 3, cols: crop.w, rows: crop.h } },
+    flags: { eugea: { version: 4, cols: crop.w, rows: crop.h } },
   };
 }
 
@@ -348,7 +458,7 @@ export function foundryLevel(map: DungeonMap, index: number, crop: Crop, ppg: nu
 // ---------- Universal VTT (.dd2vtt) ----------
 
 export function universalVTT(view: DungeonMap, crop: Crop, ppg: number, imageB64: string, baked: boolean): Record<string, unknown> {
-  const geo = new Renderer().geometry(view, resolveTheme(view.settings.theme, view.settings.colors));
+  const geo = new Renderer().geometry(view, mapTheme(view.settings));
   const P = (x: number, y: number) => ({ x: +(x - crop.x).toFixed(4), y: +(y - crop.y).toFixed(4) });
   const los: { x: number; y: number }[][] = [];
   for (const poly of geo.wallPolys) {
@@ -359,7 +469,7 @@ export function universalVTT(view: DungeonMap, crop: Crop, ppg: number, imageB64
     los.push(line);
   }
   for (const s of geo.interiorWalls) los.push([P(s.x1, s.y1), P(s.x2, s.y2)]);
-  const objects: { x: number; y: number }[][] = propBlockers(view).map((s) => [P(s.x1, s.y1), P(s.x2, s.y2)]);
+  const objects: { x: number; y: number }[][] = obstacleSegments(view).map((s) => [P(s.x1, s.y1), P(s.x2, s.y2)]);
   const portals = geo.portals
     .filter((d) => d.type === EDGE.DOOR || d.type === EDGE.LOCKED || d.type === EDGE.SECRET)
     .map((d) => ({

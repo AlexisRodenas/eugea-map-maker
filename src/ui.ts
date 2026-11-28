@@ -170,6 +170,9 @@ export const ICONS: Record<string, string> = {
   rotL: I('<path d="M4 4v6h6"/><path d="M4.5 10A8 8 0 1112 20"/>'),
   rotR: I('<path d="M20 4v6h-6"/><path d="M19.5 10A8 8 0 1012 20"/>'),
   fit: I('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
+  rampart: I('<path d="M3 20V9h3v2h2V9h3v2h2V9h3v2h2V9h3v11z"/><path d="M10 20v-4a2 2 0 014 0v4"/>'),
+  passage: I('<path d="M4 20h4v-4h4v-4h4V8h4"/><path d="M15 4h5v5"/><path d="M20 4l-6 6"/>'),
+  scatter: I('<circle cx="7" cy="8" r="2.5"/><circle cx="16" cy="6" r="2"/><circle cx="12" cy="14" r="3"/><circle cx="18" cy="17" r="2"/><circle cx="6" cy="18" r="1.5"/>'),
 };
 
 export function icon(name: string): HTMLElement {

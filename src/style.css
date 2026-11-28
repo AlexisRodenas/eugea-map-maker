@@ -984,3 +984,57 @@ input[type='color']::-webkit-color-swatch {
 .library input[type='search'] {
   width: 100%;
 }
+
+/* Passages (téléportations) */
+.passages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.passage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.passage-row.on {
+  border-color: #b07cff;
+  box-shadow: inset 0 0 0 1px rgba(176, 124, 255, 0.35);
+}
+.passage-row .row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.passage-row input[type='text'] {
+  min-width: 0;
+  flex: 1;
+}
+button.small.on {
+  border-color: var(--gold);
+  color: var(--gold2);
+}
+button.link {
+  background: transparent;
+  border-color: transparent;
+  color: #c9b2ff;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+button.link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+/* Pinceau de dispersion */
+.scatter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}

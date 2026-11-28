@@ -1,4 +1,4 @@
-import { DungeonMap, Level, MapSettings } from './model';
+import { DungeonMap, Level, MapSettings, Passage } from './model';
 
 interface Snapshot {
   name: string;
@@ -7,6 +7,7 @@ interface Snapshot {
   cur: number;
   levels: Level[];
   settings: MapSettings;
+  passages: Passage[];
 }
 
 function snap(m: DungeonMap): Snapshot {
@@ -17,6 +18,7 @@ function snap(m: DungeonMap): Snapshot {
     cur: m.cur,
     levels: m.levels.map((l) => l.clone()),
     settings: structuredClone(m.settings),
+    passages: structuredClone(m.passages),
   };
 }
 
@@ -27,6 +29,7 @@ function restore(m: DungeonMap, s: Snapshot): void {
   m.levels = s.levels;
   m.cur = Math.min(s.cur, s.levels.length - 1);
   m.settings = s.settings;
+  m.passages = s.passages;
   m.touchAll();
 }
 

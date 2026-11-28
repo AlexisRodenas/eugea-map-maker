@@ -163,6 +163,47 @@ export interface Label {
 
 export type WallStyle = 'straight' | 'rounded' | 'organic';
 
+export type RampartStyle = 'stone' | 'palisade';
+
+/**
+ * Rempart / muraille : ligne brisée épaisse (pierre crénelée ou palissade), avec tours aux angles.
+ * `x, y` : point d'ancrage (déplacé par la sélection) ; `pts` : sommets relatifs à l'ancrage.
+ */
+export interface Rampart {
+  id: string;
+  x: number;
+  y: number;
+  pts: number[];
+  closed: boolean;
+  width: number; // épaisseur en cases
+  style: RampartStyle;
+  towers: boolean;
+  /** Créneaux de l'autre côté (lignes ouvertes). */
+  flip?: boolean;
+  /** Ligne ouverte : tour au début / à la fin (défaut : oui ; non contre une porte). */
+  ends?: [boolean, boolean];
+}
+
+/** Extrémité d'un passage : un niveau et le centre de la zone (en cases). */
+export interface PassageEnd {
+  level: string;
+  x: number;
+  y: number;
+}
+
+/** Passage (téléportation) entre deux points, sur le même niveau ou deux niveaux différents. */
+export interface Passage {
+  id: string;
+  name: string;
+  a: PassageEnd;
+  b: PassageEnd;
+  size: number; // côté de la zone, en cases
+  /** Sens unique : de a vers b seulement. */
+  oneWay?: boolean;
+}
+
+export type HatchSetting = 'auto' | 'clusters' | 'lines' | 'dots' | 'none';
+
 export interface MapSettings {
   theme: string;
   colors: Record<string, string>; // surcharges de couleurs du thème
@@ -173,6 +214,14 @@ export interface MapSettings {
   darkness: number; // 0..1 (Foundry + aperçu)
   /** Images personnelles dessinées à la place d'un objet intégré (type -> variantes). */
   skins: Record<string, string[]>;
+  /** Effets autour des murs (hachures dans le vide, ombre intérieure). */
+  wallFx: boolean;
+  /** Style des hachures (« auto » : celui du thème). */
+  hatch: HatchSetting;
+  /** Ombres portées des objets. */
+  shadows: boolean;
+  /** Vignette (bords assombris) 0..1, dans l'image exportée aussi. */
+  vignette: number;
 }
 
 export function defaultSettings(): MapSettings {
@@ -185,6 +234,10 @@ export function defaultSettings(): MapSettings {
     showGrid: true,
     darkness: 0.6,
     skins: {},
+    wallFx: true,
+    hatch: 'auto',
+    shadows: true,
+    vignette: 0,
   };
 }
 
@@ -214,6 +267,7 @@ export class Level {
   props: Prop[] = [];
   lights: Light[] = [];
   labels: Label[] = [];
+  ramparts: Rampart[] = [];
 
   constructor(cols: number, rows: number, z = 0, name = levelName(z), id = uid()) {
     this.id = id;
@@ -238,6 +292,7 @@ export class Level {
     l.props = this.props.map((p) => ({ ...p }));
     l.lights = this.lights.map((o) => ({ ...o }));
     l.labels = this.labels.map((o) => ({ ...o }));
+    l.ramparts = this.ramparts.map((o) => ({ ...o, pts: o.pts.slice() }));
     return l;
   }
 }
@@ -252,6 +307,8 @@ export class DungeonMap {
   /** Index du niveau courant (les niveaux sont triés par z croissant). */
   cur = 0;
   settings: MapSettings = defaultSettings();
+  /** Passages entre deux points (escaliers éloignés, portails, trappes...), tous niveaux. */
+  passages: Passage[] = [];
 
   /** Incrémenté à chaque modification des cases/arêtes (invalide la géométrie). */
   version = 0;
@@ -309,6 +366,12 @@ export class DungeonMap {
   }
   set labels(v: Label[]) {
     this.level.labels = v;
+  }
+  get ramparts(): Rampart[] {
+    return this.level.ramparts;
+  }
+  set ramparts(v: Rampart[]) {
+    this.level.ramparts = v;
   }
 
   inBounds(x: number, y: number): boolean {
@@ -412,6 +475,7 @@ export class DungeonMap {
       lvl.props = lvl.props.map((p) => ({ ...p, id: uid() }));
       lvl.lights = lvl.lights.map((p) => ({ ...p, id: uid() }));
       lvl.labels = lvl.labels.map((p) => ({ ...p, id: uid() }));
+      lvl.ramparts = lvl.ramparts.map((p) => ({ ...p, id: uid() }));
     } else lvl = new Level(this.cols, this.rows, z);
     this.levels.push(lvl);
     this.levels.sort((a, b) => a.z - b.z);
@@ -422,6 +486,8 @@ export class DungeonMap {
 
   removeLevel(i: number): void {
     if (this.levels.length <= 1) return;
+    const gone = this.levels[i].id;
+    this.passages = this.passages.filter((p) => p.a.level !== gone && p.b.level !== gone);
     this.levels.splice(i, 1);
     this.cur = Math.max(0, Math.min(this.cur >= i ? this.cur - 1 : this.cur, this.levels.length - 1));
     this.touchAll();
@@ -464,6 +530,15 @@ export class DungeonMap {
         y0 = Math.min(y0, Math.floor(p.y - r));
         x1 = Math.max(x1, Math.ceil(p.x + r));
         y1 = Math.max(y1, Math.ceil(p.y + r));
+      }
+      for (const r of lv.ramparts) {
+        const m = r.width / 2 + (r.towers ? r.width : 0.5);
+        for (let i = 0; i < r.pts.length; i += 2) {
+          x0 = Math.min(x0, Math.floor(r.x + r.pts[i] - m));
+          y0 = Math.min(y0, Math.floor(r.y + r.pts[i + 1] - m));
+          x1 = Math.max(x1, Math.ceil(r.x + r.pts[i] + m));
+          y1 = Math.max(y1, Math.ceil(r.y + r.pts[i + 1] + m));
+        }
       }
       for (const l of lv.labels) {
         const hw = Math.max(0.5, l.text.length * l.size * 0.32),
@@ -514,8 +589,10 @@ export class DungeonMap {
       l.props = src.props.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })).filter((p) => inside(p.x, p.y));
       l.lights = src.lights.map((o) => ({ ...o, x: o.x + dx, y: o.y + dy })).filter((o) => inside(o.x, o.y));
       l.labels = src.labels.map((o) => ({ ...o, x: o.x + dx, y: o.y + dy })).filter((o) => inside(o.x, o.y));
+      l.ramparts = src.ramparts.map((o) => ({ ...o, pts: o.pts.slice(), x: o.x + dx, y: o.y + dy }));
       return l;
     });
+    m.passages = this.passages.map((p) => ({ ...p, a: { ...p.a, x: p.a.x + dx, y: p.a.y + dy }, b: { ...p.b, x: p.b.x + dx, y: p.b.y + dy } }));
     m.touchAll();
     return m;
   }
@@ -560,7 +637,9 @@ export class DungeonMap {
         props: l.props,
         lights: l.lights,
         labels: l.labels,
+        ramparts: l.ramparts,
       })),
+      passages: this.passages,
     };
   }
 
@@ -589,11 +668,14 @@ export class DungeonMap {
       l.props = s.props || [];
       l.lights = s.lights || [];
       l.labels = s.labels || [];
+      l.ramparts = s.ramparts || [];
       return l;
     });
     if (!m.levels.length) m.levels = [new Level(d.cols, d.rows)];
     m.levels.sort((a, b) => a.z - b.z);
     m.cur = d.format === 'eugea-map' ? Math.max(0, Math.min(m.levels.length - 1, d.current ?? 0)) : 0;
+    const ids = new Set(m.levels.map((l) => l.id));
+    m.passages = (d.format === 'eugea-map' ? d.passages ?? [] : []).filter((p) => ids.has(p.a?.level) && ids.has(p.b?.level));
     m.touchAll();
     return m;
   }
@@ -631,6 +713,7 @@ export interface SavedLevel {
   props: Prop[];
   lights: Light[];
   labels: Label[];
+  ramparts?: Rampart[];
 }
 
 export interface SavedMap {
@@ -642,6 +725,7 @@ export interface SavedMap {
   current: number;
   settings: MapSettings;
   levels: SavedLevel[];
+  passages?: Passage[];
   /** Images personnelles intégrées au fichier (absentes de la sauvegarde automatique). */
   assets?: Record<string, SavedAsset>;
 }

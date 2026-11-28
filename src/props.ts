@@ -1,4 +1,4 @@
-import type { LightAnim, Prop } from './model';
+import { EDGE, LightAnim, Prop } from './model';
 import type { PropPalette } from './themes';
 import { Asset, assetImage } from './assets';
 import { Rng, hashString, rgba, lighten, darken, mix } from './util';
@@ -39,6 +39,10 @@ export interface PropDef {
   roof?: boolean;
   /** Se pose en glissant un rectangle (toits, auvents). */
   area?: boolean;
+  /** Ombre portée (défaut : objets posés au-dessus du sol, hors sources de lumière). */
+  shadow?: boolean;
+  /** Murs Foundry propres à l'objet : segments locaux [x1, y1, x2, y2, EDGE.*] (porte fortifiée...). */
+  walls?: (w: number, h: number) => [number, number, number, number, number][];
   draw: (e: DrawEnv) => void;
 }
 
@@ -110,32 +114,120 @@ function flame(e: DrawEnv, x: number, y: number, r: number): void {
   c.fill();
 }
 
-function canopy(e: DrawEnv, R: number, lobes: number, color: string): void {
-  const { c, rng } = e;
-  const circles: [number, number, number][] = [[0, 0, R * 0.55]];
+/**
+ * Feuillage vu du dessus : contour en lobes, volume éclairé en haut à gauche,
+ * touffes ombrées et petites feuilles.
+ */
+function foliage(e: DrawEnv, R: number, color: string, lobes = 11, clumps = 7): void {
+  const { c, rng, pal } = e;
+  const ring: [number, number, number][] = [];
   const off = rng.float(0, 6.28);
   for (let i = 0; i < lobes; i++) {
-    const a = off + (i / lobes) * Math.PI * 2;
-    const d = R * rng.float(0.5, 0.62);
-    circles.push([Math.cos(a) * d, Math.sin(a) * d, R * rng.float(0.32, 0.42)]);
+    const a = off + (i / lobes) * Math.PI * 2 + rng.float(-0.15, 0.15);
+    const r = R * rng.float(0.24, 0.33);
+    const d = R - r * rng.float(0.95, 1.12);
+    ring.push([Math.cos(a) * d, Math.sin(a) * d, r]);
   }
-  c.beginPath();
-  for (const [x, y, r] of circles) {
-    c.moveTo(x + r, y);
-    c.arc(x, y, r, 0, Math.PI * 2);
+  const body = new Path2D();
+  body.moveTo(R * 0.72, 0);
+  body.arc(0, 0, R * 0.72, 0, Math.PI * 2);
+  for (const [x, y, r] of ring) {
+    body.moveTo(x + r, y);
+    body.arc(x, y, r, 0, Math.PI * 2);
   }
-  c.lineWidth = e.lw * 2.2;
-  c.strokeStyle = e.pal.ink;
-  c.stroke();
+  // contour : trait épais puis remplissage (seul le bord extérieur reste visible)
+  c.lineWidth = e.lw * 2.3;
+  c.strokeStyle = pal.ink;
+  c.stroke(body);
   c.fillStyle = color;
-  c.fill();
-  c.beginPath();
-  for (const [x, y, r] of circles.slice(1)) {
-    c.moveTo(x - r * 0.1 + r * 0.45, y - r * 0.2);
-    c.arc(x - r * 0.1, y - r * 0.2, r * 0.45, 0, Math.PI * 2);
+  c.fill(body);
+  c.save();
+  c.clip(body);
+  const g = c.createRadialGradient(-R * 0.35, -R * 0.4, R * 0.05, -R * 0.05, -R * 0.05, R * 1.2);
+  g.addColorStop(0, rgba(lighten(color, 0.32), 0.85));
+  g.addColorStop(0.45, rgba(color, 0));
+  g.addColorStop(1, rgba(darken(color, 0.5), 0.75));
+  c.fillStyle = g;
+  c.fillRect(-R, -R, R * 2, R * 2);
+  // touffes : chacune éclairée en haut à gauche, ombrée en bas à droite
+  for (let k = 0; k < clumps; k++) {
+    const a = rng.float(0, Math.PI * 2),
+      d = R * Math.sqrt(rng.float(0.02, 0.4));
+    const r = R * rng.float(0.2, 0.32);
+    const x = Math.cos(a) * d,
+      y = Math.sin(a) * d;
+    const cg = c.createRadialGradient(x - r * 0.4, y - r * 0.45, r * 0.05, x, y, r);
+    cg.addColorStop(0, rgba(lighten(color, 0.28), 0.95));
+    cg.addColorStop(0.75, rgba(color, 0.55));
+    cg.addColorStop(1, rgba(color, 0));
+    c.beginPath();
+    c.arc(x, y, r, 0, Math.PI * 2);
+    c.fillStyle = cg;
+    c.fill();
+    c.beginPath();
+    c.arc(x, y, r * 0.95, -0.35, Math.PI * 0.85);
+    c.lineWidth = e.lw * 0.9;
+    c.strokeStyle = rgba(darken(color, 0.55), 0.5);
+    c.stroke();
   }
-  c.fillStyle = lighten(color, 0.18);
-  c.fill();
+  // petites feuilles
+  c.beginPath();
+  const n = Math.round(R * R * 30);
+  for (let k = 0; k < n; k++) {
+    const a = rng.float(0, Math.PI * 2),
+      d = R * Math.sqrt(rng.next()) * 0.95;
+    const x = Math.cos(a) * d,
+      y = Math.sin(a) * d;
+    const b = rng.float(0, Math.PI * 2);
+    const l = R * 0.05;
+    c.moveTo(x, y);
+    c.lineTo(x + Math.cos(b) * l, y + Math.sin(b) * l);
+  }
+  c.lineWidth = e.lw * 0.7;
+  c.strokeStyle = rgba(darken(color, 0.45), 0.35);
+  c.stroke();
+  c.restore();
+}
+
+/** Conifère vu du dessus : couronnes d'aiguilles superposées, de la plus sombre à la plus claire. */
+function conifer(e: DrawEnv, R: number, color: string): void {
+  const { c, rng, pal } = e;
+  const layers = 4;
+  for (let L = 0; L < layers; L++) {
+    const f = 1 - L * 0.22;
+    const n = Math.round(10 + 12 * f);
+    const off = rng.float(0, 6.28);
+    const pts: number[] = [];
+    for (let i = 0; i < n * 2; i++) {
+      const a = off + (i / (n * 2)) * Math.PI * 2;
+      const r = R * f * (i % 2 ? rng.float(0.7, 0.8) : rng.float(0.94, 1.04));
+      pts.push(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    poly(c, pts);
+    const col = mix(darken(color, 0.35), lighten(color, 0.14), L / (layers - 1));
+    const g = c.createRadialGradient(-R * f * 0.35, -R * f * 0.4, 0, 0, 0, R * f);
+    g.addColorStop(0, lighten(col, 0.16));
+    g.addColorStop(1, darken(col, 0.16));
+    c.fillStyle = g;
+    c.fill();
+    c.lineWidth = e.lw * (L === 0 ? 1.6 : 0.6);
+    c.strokeStyle = L === 0 ? pal.ink : rgba(darken(color, 0.6), 0.6);
+    c.stroke();
+  }
+  // aiguilles rayonnantes
+  c.beginPath();
+  for (let i = 0; i < 30; i++) {
+    const a = rng.float(0, Math.PI * 2);
+    const r0 = R * rng.float(0.08, 0.3),
+      r1 = R * rng.float(0.5, 0.9);
+    c.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+    c.lineTo(Math.cos(a) * r1, Math.sin(a) * r1);
+  }
+  c.lineWidth = e.lw * 0.5;
+  c.strokeStyle = rgba(darken(color, 0.55), 0.4);
+  c.stroke();
+  circle(c, 0, 0, R * 0.07);
+  fs(e, pal.woodDark, pal.ink, e.lw * 0.5);
 }
 
 type RoofStyle = 'thatch' | 'tiles' | 'slate' | 'shingle';
@@ -152,10 +244,23 @@ function roofDraw(e: DrawEnv, base: string, style: RoofStyle): void {
     y0 = -D / 2,
     half = D / 2;
   const ink = darken(base, 0.55);
-  c.fillStyle = lighten(base, 0.1);
+  // pans : éclairé (haut) et à l'ombre (bas), plus sombres vers l'égout
+  const g1 = c.createLinearGradient(0, 0, 0, y0);
+  g1.addColorStop(0, lighten(base, 0.18));
+  g1.addColorStop(1, lighten(base, 0.02));
+  c.fillStyle = g1;
   c.fillRect(x0, y0, L, half);
-  c.fillStyle = darken(base, 0.17);
+  const g2 = c.createLinearGradient(0, 0, 0, half);
+  g2.addColorStop(0, darken(base, 0.1));
+  g2.addColorStop(1, darken(base, 0.28));
+  c.fillStyle = g2;
   c.fillRect(x0, 0, L, half);
+  // variations de teinte (tuiles, ardoises, bottes de chaume)
+  for (let n = Math.round(L * D * 6); n > 0; n--) {
+    const v = rng.float(y0, y0 + D);
+    c.fillStyle = rng.chance(0.5) ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.07)';
+    c.fillRect(rng.float(x0, x0 + L - 0.2), v, rng.float(0.15, 0.4), style === 'thatch' ? 0.3 : 0.22);
+  }
   const row = style === 'thatch' ? 0.3 : style === 'slate' ? 0.2 : 0.24;
   // rangs parallèles au faîtage
   c.beginPath();
@@ -204,6 +309,15 @@ function roofDraw(e: DrawEnv, base: string, style: RoofStyle): void {
   c.rect(x0, -0.08, L, 0.16);
   c.fillStyle = darken(base, style === 'thatch' ? 0.3 : 0.38);
   c.fill();
+  c.beginPath();
+  line(c, x0, -0.045, x0 + L, -0.045);
+  st(e, rgba(lighten(base, 0.4), 0.45), 0.025);
+  if (style !== 'thatch') {
+    // tuiles faîtières
+    c.beginPath();
+    for (let u = x0 + 0.25; u < x0 + L - 0.1; u += 0.3) line(c, u, -0.08, u, 0.08);
+    st(e, rgba(ink, 0.5), e.lw * 0.5);
+  }
   // rives et égouts
   c.beginPath();
   c.rect(x0 + 0.03, y0 + 0.03, L - 0.06, D - 0.06);
@@ -360,16 +474,44 @@ export const PROPS: PropDef[] = [
     cat: 'Structure',
     w: 1,
     h: 1,
+    blocks: 'rect',
     draw: (e) => {
-      const { c, pal } = e;
+      const { c, w, h, pal } = e;
+      const s = Math.min(w, h);
+      // socle à deux degrés
+      rrect(c, -s * 0.46, -s * 0.46, s * 0.92, s * 0.92, 0.04);
+      fs(e, darken(pal.stone, 0.12));
+      rrect(c, -s * 0.38, -s * 0.38, s * 0.76, s * 0.76, 0.03);
+      const g = c.createLinearGradient(-s * 0.38, -s * 0.38, s * 0.38, s * 0.38);
+      g.addColorStop(0, lighten(pal.stone, 0.12));
+      g.addColorStop(1, darken(pal.stone, 0.08));
+      fs(e, g, pal.ink, e.lw * 0.7);
+      // personnage vu du dessus : épaules, bras, tête
+      const k = s * 0.95;
       c.beginPath();
-      c.rect(-0.42, -0.42, 0.84, 0.84);
-      fs(e, pal.stoneDark);
+      c.ellipse(0, k * 0.04, k * 0.27, k * 0.13, 0, 0, Math.PI * 2);
+      const body = c.createRadialGradient(-k * 0.08, -k * 0.04, 0, 0, k * 0.04, k * 0.28);
+      body.addColorStop(0, lighten(pal.stone, 0.35));
+      body.addColorStop(1, darken(pal.stone, 0.05));
+      fs(e, body, pal.ink, e.lw * 0.8);
+      // bras tendu tenant une épée
       c.beginPath();
-      c.ellipse(0, 0.06, 0.3, 0.16, 0, 0, Math.PI * 2);
-      fs(e, lighten(pal.stone, 0.15));
-      circle(c, 0, -0.04, 0.13);
-      fs(e, lighten(pal.stone, 0.25));
+      c.moveTo(k * 0.2, k * 0.02);
+      c.lineTo(k * 0.33, -k * 0.16);
+      st(e, pal.ink, e.lw * 2.2);
+      c.beginPath();
+      c.moveTo(k * 0.2, k * 0.02);
+      c.lineTo(k * 0.33, -k * 0.16);
+      st(e, lighten(pal.stone, 0.2), e.lw * 1.2);
+      c.beginPath();
+      c.moveTo(k * 0.33, -k * 0.16);
+      c.lineTo(k * 0.36, -k * 0.38);
+      st(e, pal.metal, e.lw * 1.1);
+      circle(c, 0, -k * 0.01, k * 0.1);
+      const head = c.createRadialGradient(-k * 0.03, -k * 0.04, 0, 0, -k * 0.01, k * 0.1);
+      head.addColorStop(0, lighten(pal.stone, 0.45));
+      head.addColorStop(1, pal.stone);
+      fs(e, head, pal.ink, e.lw * 0.8);
     },
   },
   {
@@ -705,34 +847,45 @@ export const PROPS: PropDef[] = [
     h: 1,
     draw: (e) => {
       const { c, pal, rng } = e;
-      for (let i = 0; i < 3; i++) {
-        const a = rng.float(0, Math.PI);
-        const x = rng.float(-0.2, 0.2),
-          y = rng.float(-0.2, 0.2);
-        const l = rng.float(0.16, 0.26);
+      const bone = (x: number, y: number, a: number, l: number) => {
         const dx = Math.cos(a) * l,
           dy = Math.sin(a) * l;
         c.beginPath();
         line(c, x - dx, y - dy, x + dx, y + dy);
-        st(e, pal.ink, e.lw * 2.6);
+        st(e, pal.ink, 0.11);
+        for (const sgn of [-1, 1])
+          for (const o of [-1, 1]) {
+            circle(c, x + sgn * dx - Math.sin(a) * o * 0.035, y + sgn * dy + Math.cos(a) * o * 0.035, 0.045);
+            fs(e, pal.bone, pal.ink, e.lw * 0.7);
+          }
         c.beginPath();
         line(c, x - dx, y - dy, x + dx, y + dy);
-        st(e, pal.bone, e.lw * 1.4);
-        for (const s of [-1, 1]) {
-          circle(c, x + s * dx, y + s * dy, 0.045);
-          fs(e, pal.bone, pal.ink, e.lw * 0.5);
-        }
-      }
-      const sx = rng.float(-0.2, 0.2),
-        sy = rng.float(-0.2, 0.2);
-      circle(c, sx, sy, 0.12);
-      fs(e, pal.bone, pal.ink, e.lw * 0.7);
+        st(e, pal.bone, 0.06);
+      };
+      for (let i = 0; i < 3; i++) bone(rng.float(-0.22, 0.22), rng.float(-0.22, 0.22), rng.float(0, Math.PI), rng.float(0.13, 0.22));
+      // crâne
+      const sx = rng.float(-0.15, 0.15),
+        sy = rng.float(-0.15, 0.15);
+      c.save();
+      c.translate(sx, sy);
+      c.rotate(rng.float(-0.6, 0.6));
       c.beginPath();
-      c.arc(sx - 0.04, sy, 0.025, 0, 7);
-      c.moveTo(sx + 0.065, sy);
-      c.arc(sx + 0.04, sy, 0.025, 0, 7);
+      c.ellipse(0, -0.02, 0.15, 0.13, 0, 0, Math.PI * 2);
+      const g = c.createRadialGradient(-0.05, -0.07, 0, 0, -0.02, 0.16);
+      g.addColorStop(0, lighten(pal.bone, 0.3));
+      g.addColorStop(1, darken(pal.bone, 0.12));
+      fs(e, g, pal.ink, e.lw * 0.8);
+      rrect(c, -0.08, 0.06, 0.16, 0.09, 0.03);
+      fs(e, darken(pal.bone, 0.05), pal.ink, e.lw * 0.6);
+      c.beginPath();
+      c.ellipse(-0.055, -0.01, 0.035, 0.04, 0, 0, Math.PI * 2);
+      c.ellipse(0.055, -0.01, 0.035, 0.04, 0, 0, Math.PI * 2);
+      c.moveTo(0, 0.03);
+      c.lineTo(-0.015, 0.06);
+      c.lineTo(0.015, 0.06);
       c.fillStyle = pal.ink;
       c.fill();
+      c.restore();
     },
   },
   {
@@ -909,7 +1062,7 @@ export const PROPS: PropDef[] = [
     w: 2,
     h: 2,
     layer: 2,
-    draw: (e) => canopy(e, (Math.min(e.w, e.h) / 2) * 0.95, 7, e.pal.plant),
+    draw: (e) => foliage(e, (Math.min(e.w, e.h) / 2) * 0.96, mix(e.pal.plant, '#4f7f35', 0.25 + e.rng.float(-0.15, 0.15)), 11, 7),
   },
   {
     kind: 'bush',
@@ -918,7 +1071,21 @@ export const PROPS: PropDef[] = [
     cat: 'Nature',
     w: 1,
     h: 1,
-    draw: (e) => canopy(e, (Math.min(e.w, e.h) / 2) * 0.85, 5, lighten(e.pal.plant, 0.1)),
+    draw: (e) => {
+      const R = (Math.min(e.w, e.h) / 2) * 0.88;
+      const col = lighten(e.pal.plant, 0.08);
+      foliage(e, R, col, 8, 4);
+      // quelques baies ou fleurs
+      if (e.rng.chance(0.5)) {
+        const berry = e.rng.pick([e.pal.cloth, e.pal.magic, '#f4f1e8']);
+        for (let k = 0; k < 6; k++) {
+          const a = e.rng.float(0, Math.PI * 2),
+            d = R * e.rng.float(0.15, 0.7);
+          circle(e.c, Math.cos(a) * d, Math.sin(a) * d, R * 0.07);
+          fs(e, berry, e.pal.ink, e.lw * 0.4);
+        }
+      }
+    },
   },
   {
     kind: 'mushrooms',
@@ -1023,29 +1190,7 @@ export const PROPS: PropDef[] = [
     h: 2,
     layer: 2,
     rand: true,
-    draw: (e) => {
-      const { c, w, h, pal, rng } = e;
-      const R = (Math.min(w, h) / 2) * 0.95;
-      const n = rng.int(9, 12);
-      const off = rng.float(0, 6.28);
-      const layers: [number, string][] = [
-        [1, darken(pal.plant, 0.3)],
-        [0.72, darken(pal.plant, 0.1)],
-        [0.45, lighten(pal.plant, 0.1)],
-      ];
-      for (const [f, col] of layers) {
-        const pts: number[] = [];
-        for (let i = 0; i < n * 2; i++) {
-          const a = off + (i / (n * 2)) * Math.PI * 2 + f;
-          const r = R * f * (i % 2 ? 0.62 : 1);
-          pts.push(Math.cos(a) * r, Math.sin(a) * r);
-        }
-        poly(c, pts);
-        fs(e, col, pal.ink, e.lw * (f === 1 ? 1.3 : 0.6));
-      }
-      circle(c, 0, 0, R * 0.08);
-      fs(e, pal.woodDark, pal.ink, e.lw * 0.5);
-    },
+    draw: (e) => conifer(e, (Math.min(e.w, e.h) / 2) * 0.96, mix(e.pal.plant, '#2f5d3a', 0.35)),
   },
   {
     kind: 'stump',
@@ -1099,20 +1244,29 @@ export const PROPS: PropDef[] = [
     layer: 0,
     draw: (e) => {
       const { c, pal, rng } = e;
-      const colors = [pal.cloth, pal.magic, '#f4f1e8', pal.gold];
-      for (let i = 0; i < 7; i++) {
-        const x = rng.float(-0.35, 0.35),
-          y = rng.float(-0.35, 0.35);
-        const col = rng.pick(colors);
-        c.fillStyle = col;
+      // feuillage bas
+      for (let i = 0; i < 9; i++) {
+        const x = rng.float(-0.32, 0.32),
+          y = rng.float(-0.32, 0.32),
+          a = rng.float(0, Math.PI);
+        c.beginPath();
+        c.ellipse(x, y, 0.09, 0.035, a, 0, Math.PI * 2);
+        fs(e, rng.chance(0.5) ? pal.plant : darken(pal.plant, 0.15), darken(pal.plant, 0.5), e.lw * 0.4);
+      }
+      const col = rng.pick([pal.cloth, pal.magic, '#f4f1e8', pal.gold, '#e98fb0']);
+      for (let i = 0; i < 6; i++) {
+        const x = rng.float(-0.3, 0.3),
+          y = rng.float(-0.3, 0.3);
+        const r = rng.float(0.045, 0.06);
+        c.beginPath();
         for (let k = 0; k < 5; k++) {
-          const a = (k / 5) * Math.PI * 2;
-          circle(c, x + Math.cos(a) * 0.045, y + Math.sin(a) * 0.045, 0.035);
-          c.fill();
+          const a = (k / 5) * Math.PI * 2 + i;
+          c.moveTo(x + Math.cos(a) * r * 1.6, y + Math.sin(a) * r * 1.6);
+          c.arc(x + Math.cos(a) * r, y + Math.sin(a) * r, r * 0.75, 0, Math.PI * 2);
         }
-        circle(c, x, y, 0.025);
-        c.fillStyle = pal.gold;
-        c.fill();
+        fs(e, col, darken(col, 0.45), e.lw * 0.35);
+        circle(c, x, y, r * 0.55);
+        fs(e, pal.gold, darken(pal.gold, 0.4), e.lw * 0.3);
       }
     },
   },
@@ -1231,14 +1385,17 @@ export const PROPS: PropDef[] = [
     light: { radius: 5, color: '#ffcf7a', anim: 'torch', intensity: 0.7 },
     draw: (e) => {
       const { c, pal } = e;
-      flame(e, 0, 0, 0.26);
+      flame(e, 0, 0, 0.3);
+      // cage hexagonale et chapeau
+      const hex: number[] = [];
+      for (let k = 0; k < 6; k++) hex.push(Math.cos((k / 6) * Math.PI * 2) * 0.14, Math.sin((k / 6) * Math.PI * 2) * 0.14);
+      poly(c, hex);
+      fs(e, 'rgba(255,226,150,0.9)', pal.ink, e.lw * 0.9);
       c.beginPath();
-      c.rect(-0.1, -0.1, 0.2, 0.2);
-      fs(e, 'rgba(255,230,160,0.85)', pal.ink, e.lw * 0.9);
-      c.beginPath();
-      line(c, -0.1, 0, 0.1, 0);
-      line(c, 0, -0.1, 0, 0.1);
+      for (let k = 0; k < 6; k++) line(c, 0, 0, hex[k * 2], hex[k * 2 + 1]);
       st(e, pal.metal, e.lw * 0.6);
+      circle(c, 0, 0, 0.05);
+      fs(e, pal.metal, pal.ink, e.lw * 0.6);
     },
   },
   {
@@ -1264,14 +1421,35 @@ export const PROPS: PropDef[] = [
     h: 0.7,
     draw: (e) => {
       const { c, pal } = e;
+      // billot
+      circle(c, -0.05, 0, 0.3);
+      fs(e, pal.wood, pal.ink, e.lw);
+      circle(c, -0.05, 0, 0.2);
+      st(e, rgba(pal.woodDark, 0.6), e.lw * 0.5);
+      // enclume : talon, table, bigorne
       c.beginPath();
-      c.rect(-0.3, -0.24, 0.5, 0.48);
-      fs(e, pal.woodDark, pal.ink, e.lw * 0.7);
-      poly(c, [-0.36, -0.14, 0.18, -0.14, 0.46, 0, 0.18, 0.14, -0.36, 0.14]);
-      fs(e, pal.metal, pal.ink, e.lw);
+      c.moveTo(-0.38, -0.13);
+      c.lineTo(0.12, -0.13);
+      c.quadraticCurveTo(0.3, -0.12, 0.46, 0);
+      c.quadraticCurveTo(0.3, 0.12, 0.12, 0.13);
+      c.lineTo(-0.38, 0.13);
+      c.closePath();
+      const g = c.createLinearGradient(0, -0.13, 0, 0.13);
+      g.addColorStop(0, lighten(pal.metal, 0.35));
+      g.addColorStop(0.5, pal.metal);
+      g.addColorStop(1, darken(pal.metal, 0.3));
+      fs(e, g, pal.ink, e.lw);
       c.beginPath();
-      line(c, -0.3, 0, 0.3, 0);
-      st(e, 'rgba(255,255,255,0.35)', e.lw * 0.6);
+      c.rect(-0.3, -0.05, 0.07, 0.07);
+      c.rect(-0.18, -0.04, 0.05, 0.05);
+      c.fillStyle = darken(pal.metal, 0.5);
+      c.fill();
+      // marteau posé à côté
+      c.beginPath();
+      line(c, -0.2, 0.22, 0.2, 0.3);
+      st(e, pal.woodDark, e.lw * 1.6);
+      rrect(c, 0.16, 0.2, 0.1, 0.16, 0.02);
+      fs(e, pal.metal, pal.ink, e.lw * 0.6);
     },
   },
   {
@@ -1281,17 +1459,30 @@ export const PROPS: PropDef[] = [
     w: 1,
     h: 1,
     layer: 2,
+    rand: true,
     draw: (e) => {
-      const { c, pal } = e;
-      for (const a of [-0.35, 2.4]) {
+      const { c, pal, rng } = e;
+      const n = rng.int(2, 3);
+      const a0 = rng.float(0, Math.PI * 2);
+      for (let k = 0; k < n; k++) {
         c.save();
-        c.rotate(a);
-        poly(c, [0.05, -0.08, 0.36, -0.08, 0.44, 0, 0.36, 0.08, 0.05, 0.08]);
-        fs(e, pal.wood, pal.ink, e.lw * 0.7);
+        c.rotate(a0 + (k / n) * Math.PI * 2 + rng.float(-0.4, 0.4));
+        poly(c, [0.04, -0.09, 0.36, -0.09, 0.46, 0, 0.36, 0.09, 0.04, 0.09]);
+        const g = c.createLinearGradient(0, -0.09, 0, 0.09);
+        g.addColorStop(0, lighten(pal.wood, 0.15));
+        g.addColorStop(1, darken(pal.wood, 0.12));
+        fs(e, g, pal.ink, e.lw * 0.8);
+        c.beginPath();
+        line(c, 0.1, -0.03, 0.33, -0.03);
+        line(c, 0.1, 0.03, 0.28, 0.03);
+        st(e, rgba(pal.ink, 0.45), e.lw * 0.6);
         c.restore();
       }
-      circle(c, 0, 0, 0.08);
-      fs(e, pal.woodDark, pal.ink, e.lw * 0.7);
+      circle(c, 0, 0, 0.09);
+      fs(e, pal.woodDark, pal.ink, e.lw * 0.8);
+      circle(c, -0.02, -0.02, 0.03);
+      c.fillStyle = rgba(lighten(pal.woodDark, 0.4), 0.7);
+      c.fill();
     },
   },
   {
@@ -1327,22 +1518,57 @@ export const PROPS: PropDef[] = [
     h: 2,
     draw: (e) => {
       const { c, w, h, pal } = e;
-      const x0 = -w / 2 + 0.15,
-        y0 = -h / 2 + 0.1,
-        bw = w - 0.3,
-        bh = h - 0.2;
+      const cloth = mix(pal.paper, pal.cloth, 0.18);
+      const x0 = -w / 2 + 0.2,
+        y0 = -h / 2 + 0.15,
+        bw = w - 0.4,
+        bh = h - 0.3;
+      // haubans et piquets
+      c.beginPath();
+      for (const [x, y, tx, ty] of [
+        [x0, y0 + 0.15, -w / 2 + 0.04, -h / 2 + 0.04],
+        [x0 + bw, y0 + 0.15, w / 2 - 0.04, -h / 2 + 0.04],
+        [x0, y0 + bh - 0.15, -w / 2 + 0.04, h / 2 - 0.04],
+        [x0 + bw, y0 + bh - 0.15, w / 2 - 0.04, h / 2 - 0.04],
+      ])
+        line(c, x, y, tx, ty);
+      st(e, rgba(pal.ink, 0.55), e.lw * 0.5);
+      // deux pans, faîtage vertical
       c.beginPath();
       c.rect(x0, y0, bw / 2, bh);
-      fs(e, pal.paper, pal.ink, 0);
+      const g1 = c.createLinearGradient(x0, 0, 0, 0);
+      g1.addColorStop(0, darken(cloth, 0.05));
+      g1.addColorStop(1, lighten(cloth, 0.12));
+      fs(e, g1, pal.ink, 0);
       c.beginPath();
       c.rect(0, y0, bw / 2, bh);
-      fs(e, darken(pal.paper, 0.18), pal.ink, 0);
-      poly(c, [-0.25, h / 2 - 0.1, 0, h / 2 - 0.55, 0.25, h / 2 - 0.1]);
-      fs(e, darken(pal.paper, 0.45), pal.ink, e.lw * 0.6);
+      const g2 = c.createLinearGradient(0, 0, x0 + bw, 0);
+      g2.addColorStop(0, darken(cloth, 0.12));
+      g2.addColorStop(1, darken(cloth, 0.28));
+      fs(e, g2, pal.ink, 0);
+      // plis de la toile
+      c.beginPath();
+      for (let y = y0 + 0.3; y < y0 + bh - 0.1; y += 0.35) {
+        line(c, x0 + 0.05, y, -0.05, y - 0.08);
+        line(c, 0.05, y - 0.08, x0 + bw - 0.05, y);
+      }
+      st(e, rgba(pal.ink, 0.2), e.lw * 0.5);
+      // entrée ouverte
+      poly(c, [-0.28, y0 + bh, 0, y0 + bh - 0.55, 0.28, y0 + bh]);
+      fs(e, darken(cloth, 0.55), pal.ink, e.lw * 0.6);
       c.beginPath();
       c.rect(x0, y0, bw, bh);
       line(c, 0, y0, 0, y0 + bh);
       st(e);
+      for (const [x, y] of [
+        [-w / 2 + 0.04, -h / 2 + 0.04],
+        [w / 2 - 0.04, -h / 2 + 0.04],
+        [-w / 2 + 0.04, h / 2 - 0.04],
+        [w / 2 - 0.04, h / 2 - 0.04],
+      ]) {
+        circle(c, x, y, 0.035);
+        fs(e, pal.woodDark, pal.ink, e.lw * 0.4);
+      }
     },
   },
   {
@@ -1408,7 +1634,163 @@ export const PROPS: PropDef[] = [
     h: 4,
     layer: 3,
     roof: true,
-    draw: (e) => canopy(e, (Math.min(e.w, e.h) / 2) * 0.97, 9, darken(e.pal.plant, 0.06)),
+    draw: (e) => foliage(e, (Math.min(e.w, e.h) / 2) * 0.97, mix(darken(e.pal.plant, 0.06), '#4f7f35', 0.25), 14, 10),
+  },
+  // --- Fortifications (à placer dans une brèche de rempart)
+  {
+    kind: 'cityGate',
+    name: 'Porte fortifiée',
+    cat: 'Fortifications',
+    w: 4,
+    h: 1.6,
+    layer: 1,
+    walls: (w, h) => {
+      const t = Math.min(1.3, w * 0.32); // largeur d'une tour
+      const x = w / 2,
+        y = h / 2;
+      const r: [number, number, number, number, number][] = [];
+      for (const s of [-1, 1]) {
+        const a = s * x,
+          b = s * (x - t);
+        r.push([a, -y, b, -y, EDGE.WALL], [b, -y, b, y, EDGE.WALL], [b, y, a, y, EDGE.WALL], [a, y, a, -y, EDGE.WALL]);
+      }
+      r.push([-(x - t), 0, x - t, 0, EDGE.DOOR]);
+      return r;
+    },
+    draw: (e) => {
+      const { c, w, h, pal } = e;
+      const t = Math.min(1.3, w * 0.32);
+      const base = mix(pal.stone, '#9a948a', 0.35);
+      const x = w / 2,
+        y = h / 2,
+        gw = w - 2 * t;
+      // passage pavé
+      c.beginPath();
+      c.rect(-gw / 2, -y, gw, h);
+      fs(e, darken(base, 0.18), pal.ink, 0);
+      c.beginPath();
+      for (let v = -y + 0.2; v < y; v += 0.2) line(c, -gw / 2, v, gw / 2, v);
+      for (let u = -gw / 2 + 0.25; u < gw / 2; u += 0.3) line(c, u, -y, u, y);
+      st(e, rgba(pal.ink, 0.25), e.lw * 0.5);
+      // vantaux (porte fermée) et herse
+      c.beginPath();
+      c.rect(-gw / 2, -0.09, gw, 0.18);
+      fs(e, pal.wood, pal.ink, e.lw);
+      c.beginPath();
+      line(c, 0, -0.09, 0, 0.09);
+      st(e, pal.ink, e.lw);
+      c.beginPath();
+      for (let u = -gw / 2 + 0.12; u < gw / 2; u += 0.16) {
+        c.moveTo(u + 0.03, -0.3);
+        c.arc(u, -0.3, 0.03, 0, Math.PI * 2);
+      }
+      c.fillStyle = pal.metal;
+      c.fill();
+      // tours
+      for (const s of [-1, 1]) {
+        const x0 = s < 0 ? -x : x - t;
+        c.beginPath();
+        c.rect(x0, -y, t, h);
+        const g = c.createLinearGradient(x0, -y, x0 + t, y);
+        g.addColorStop(0, lighten(base, 0.1));
+        g.addColorStop(1, darken(base, 0.15));
+        fs(e, g, pal.ink, e.lw * 1.4);
+        // créneaux
+        const m = 0.2;
+        c.beginPath();
+        c.rect(x0 + m, -y + m, t - 2 * m, h - 2 * m);
+        fs(e, darken(base, 0.1), rgba(pal.ink, 0.6), e.lw * 0.7);
+        c.beginPath();
+        for (let u = x0 + 0.05; u < x0 + t - 0.1; u += 0.4) {
+          c.rect(u, -y, 0.22, m);
+          c.rect(u, y - m, 0.22, m);
+        }
+        for (let v = -y + 0.05; v < y - 0.1; v += 0.4) {
+          c.rect(x0, v, m, 0.22);
+          c.rect(x0 + t - m, v, m, 0.22);
+        }
+        fs(e, lighten(base, 0.15), rgba(pal.ink, 0.5), e.lw * 0.5);
+      }
+    },
+  },
+  {
+    kind: 'palisadeGate',
+    name: 'Portail de palissade',
+    cat: 'Fortifications',
+    w: 3,
+    h: 0.8,
+    walls: (w, h) => {
+      const x = w / 2,
+        p = Math.min(0.4, h / 2);
+      return [
+        [-x, -p, -x + 2 * p, -p, EDGE.WALL],
+        [-x + 2 * p, -p, -x + 2 * p, p, EDGE.WALL],
+        [-x + 2 * p, p, -x, p, EDGE.WALL],
+        [-x, p, -x, -p, EDGE.WALL],
+        [x, -p, x - 2 * p, -p, EDGE.WALL],
+        [x - 2 * p, -p, x - 2 * p, p, EDGE.WALL],
+        [x - 2 * p, p, x, p, EDGE.WALL],
+        [x, p, x, -p, EDGE.WALL],
+        [-x + 2 * p, 0, x - 2 * p, 0, EDGE.DOOR],
+      ];
+    },
+    draw: (e) => {
+      const { c, w, h, pal } = e;
+      const x = w / 2,
+        p = Math.min(0.4, h / 2);
+      // vantaux de planches
+      for (const s of [-1, 1]) {
+        c.beginPath();
+        c.rect(s < 0 ? -x + 2 * p : 0, -0.1, x - 2 * p, 0.2);
+        fs(e, pal.wood, pal.ink, e.lw);
+        c.beginPath();
+        for (let u = -x + 2 * p + 0.15; u < x - 2 * p; u += 0.15) line(c, u, -0.1, u, 0.1);
+        st(e, rgba(pal.woodDark, 0.6), e.lw * 0.5);
+      }
+      c.beginPath();
+      line(c, -x + 2 * p, 0, x - 2 * p, 0);
+      st(e, rgba(pal.woodDark, 0.8), e.lw * 0.8);
+      // gros poteaux
+      for (const s of [-1, 1]) {
+        circle(c, s * (x - p), 0, p);
+        const g = c.createRadialGradient(s * (x - p) - p * 0.3, -p * 0.3, 0, s * (x - p), 0, p);
+        g.addColorStop(0, lighten(pal.wood, 0.25));
+        g.addColorStop(1, darken(pal.wood, 0.2));
+        fs(e, g, pal.ink, e.lw * 1.2);
+        circle(c, s * (x - p), 0, p * 0.5);
+        st(e, rgba(pal.woodDark, 0.6), e.lw * 0.5);
+      }
+    },
+  },
+  {
+    kind: 'tuft',
+    name: 'Touffe d’herbe',
+    cat: 'Nature',
+    w: 0.6,
+    h: 0.6,
+    layer: 0,
+    rand: true,
+    draw: (e) => {
+      const { c, w, h, pal, rng } = e;
+      const R = Math.min(w, h) / 2;
+      const col = lighten(pal.plant, 0.05);
+      c.beginPath();
+      for (let i = 0; i < 14; i++) {
+        const a = rng.float(0, Math.PI * 2),
+          l = R * rng.float(0.55, 1);
+        c.moveTo(0, 0);
+        c.quadraticCurveTo(Math.cos(a + 0.3) * l * 0.5, Math.sin(a + 0.3) * l * 0.5, Math.cos(a) * l, Math.sin(a) * l);
+      }
+      st(e, darken(col, 0.35), e.lw * 0.9);
+      c.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = rng.float(0, Math.PI * 2),
+          l = R * rng.float(0.4, 0.8);
+        c.moveTo(0, 0);
+        c.lineTo(Math.cos(a) * l, Math.sin(a) * l);
+      }
+      st(e, lighten(col, 0.2), e.lw * 0.6);
+    },
   },
   // Image personnelle (bibliothèque) : dessinée par drawProp, absente du catalogue
   { kind: 'image', name: 'Image', cat: '', w: 1, h: 1, draw: () => undefined },
@@ -1481,6 +1863,22 @@ export function drawProp(c: Ctx, p: Prop, pal: PropPalette, skins?: Skins): void
   else if (p.kind === 'image') drawMissing(c, p, pal);
   else def.draw({ c, w: p.w, h: p.h, pal, rng: new Rng(seedOf(p.id)), lw: 0.045 });
   c.restore();
+}
+
+const NO_SHADOW = new Set(['stairs', 'spiral', 'trapdoor', 'web', 'runeCircle', 'trap', 'bridge', 'rug', 'flowers', 'tuft']);
+
+/** L'objet projette-t-il une ombre ? (pas les toits : le bâtiment en a déjà une) */
+export function castsShadow(p: Prop): boolean {
+  const def = PROP_BY_KIND[p.kind];
+  if (!def || isRoof(p) || NO_SHADOW.has(p.kind)) return false;
+  if (def.shadow !== undefined) return def.shadow;
+  return (def.layer ?? 1) >= 1 && !def.light && !def.gmOnly;
+}
+
+/** Décalage de l'ombre (cases) : plus long pour les objets hauts (arbres, lanternes). */
+export function shadowOffset(p: Prop): [number, number] {
+  const k = propLayer(p) >= 2 ? 0.2 : 0.08;
+  return [k * 0.8, k];
 }
 
 /** Toit : au-dessus des jetons dans Foundry (s'efface quand un jeton passe dessous). */

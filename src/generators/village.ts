@@ -1,4 +1,5 @@
-import { DungeonMap, EDGE, T } from '../model';
+import { DungeonMap, EDGE, Rampart, T } from '../model';
+import { cutGate, hitRampart } from '../ramparts';
 import { Rng, fbm, hashString, uid } from '../util';
 import { Dresser, RoomInfo, RoomType } from './dressing';
 import { Placer, distField, wobblyLine } from './outdoor';
@@ -17,6 +18,7 @@ export interface VillageParams {
   lights: number;
   names: boolean;
   roofs: boolean; // toits (tuiles Foundry au-dessus des jetons)
+  wall: 'none' | 'palisade' | 'stone'; // enceinte autour des bâtiments, portes sur les routes
 }
 
 export const DEFAULT_VILLAGE: VillageParams = {
@@ -33,6 +35,7 @@ export const DEFAULT_VILLAGE: VillageParams = {
   lights: 0.5,
   names: true,
   roofs: true,
+  wall: 'none',
 };
 
 type Kind = 'maison' | 'taverne' | 'forge' | 'echoppe' | 'chapelle' | 'grange' | 'entrepot';
@@ -402,6 +405,83 @@ export function generateVillage(p: VillageParams): DungeonMap {
           }
         }
       }
+  }
+
+  // --- Enceinte : palissade ou muraille autour des bâtiments, une porte sur chaque route
+  if (p.wall && p.wall !== 'none' && buildings.length) {
+    let bx0 = Infinity,
+      by0 = Infinity,
+      bx1 = -Infinity,
+      by1 = -Infinity;
+    for (const b of buildings) {
+      const horiz = b.front === 0 || b.front === 2;
+      bx0 = Math.min(bx0, b.x);
+      by0 = Math.min(by0, b.y);
+      bx1 = Math.max(bx1, b.x + (horiz ? b.w : b.d));
+      by1 = Math.max(by1, b.y + (horiz ? b.d : b.w));
+    }
+    const m = 3;
+    const x0 = Math.max(1, Math.floor(bx0) - m) + 0.5,
+      y0 = Math.max(1, Math.floor(by0) - m) + 0.5;
+    const x1 = Math.min(cols - 2, Math.ceil(bx1) + m - 1) + 0.5,
+      y1 = Math.min(rows - 2, Math.ceil(by1) + m - 1) + 0.5;
+    const stone = p.wall === 'stone';
+    let parts: Rampart[] = [
+      { id: uid(), x: x0, y: y0, pts: [0, 0, x1 - x0, 0, x1 - x0, y1 - y0, 0, y1 - y0], closed: true, width: stone ? 1 : 0.6, style: stone ? 'stone' : 'palisade', towers: true },
+    ];
+    // croisements route / enceinte
+    const ring = [x0, y0, x1, y0, x1, y1, x0, y1];
+    const hits: [number, number][] = [];
+    for (const r of roads)
+      for (let k = 0; k + 3 < r.pts.length; k += 2)
+        for (let e = 0; e < 4; e++) {
+          const ax = ring[e * 2],
+            ay = ring[e * 2 + 1],
+            bx = ring[((e + 1) % 4) * 2],
+            by = ring[((e + 1) % 4) * 2 + 1];
+          const px = r.pts[k],
+            py = r.pts[k + 1],
+            qx = r.pts[k + 2],
+            qy = r.pts[k + 3];
+          const d = (bx - ax) * (qy - py) - (by - ay) * (qx - px);
+          if (Math.abs(d) < 1e-9) continue;
+          const t = ((px - ax) * (qy - py) - (py - ay) * (qx - px)) / d;
+          const u = ((px - ax) * (by - ay) - (py - ay) * (bx - ax)) / d;
+          if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+          const hx = ax + t * (bx - ax),
+            hy = ay + t * (by - ay);
+          const corner = Math.min(Math.hypot(hx - x0, hy - y0), Math.hypot(hx - x1, hy - y0), Math.hypot(hx - x1, hy - y1), Math.hypot(hx - x0, hy - y1));
+          if (corner > 3 && !hits.some(([x, y]) => Math.hypot(x - hx, y - hy) < 5)) hits.push([hx, hy]);
+        }
+    for (const [hx, hy] of hits) {
+      const r = parts.find((q) => hitRampart(q, hx, hy));
+      const cut = r && cutGate(r, hx, hy);
+      if (!r || !cut) continue;
+      parts = parts.flatMap((q) => (q === r ? cut.parts : [q]));
+      map.props.push(cut.gate);
+    }
+    map.ramparts.push(...parts);
+    // pas d'arbres ni de champs sur le tracé
+    for (let x = Math.floor(x0) - 1; x <= Math.ceil(x1) + 1; x++)
+      for (const yy of [y0, y1])
+        for (let dy = -1; dy <= 1; dy++) {
+          const cx = x,
+            cy = Math.floor(yy) + dy;
+          if (map.inBounds(cx, cy)) {
+            blocked[cy * cols + cx] = 1;
+            P.occ[cy * cols + cx] = 1;
+          }
+        }
+    for (let y = Math.floor(y0) - 1; y <= Math.ceil(y1) + 1; y++)
+      for (const xx of [x0, x1])
+        for (let dx = -1; dx <= 1; dx++) {
+          const cx = Math.floor(xx) + dx,
+            cy = y;
+          if (map.inBounds(cx, cy)) {
+            blocked[cy * cols + cx] = 1;
+            P.occ[cy * cols + cx] = 1;
+          }
+        }
   }
 
   // --- Champs clôturés (village)

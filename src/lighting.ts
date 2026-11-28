@@ -1,6 +1,7 @@
 import { DungeonMap, EDGE, LightAnim } from './model';
 import { Geometry, Seg, wallSegments } from './geometry';
 import { PROP_BY_KIND, propLight } from './props';
+import { rampartSegments, rampartSig } from './ramparts';
 
 export interface ResolvedLight {
   id: string;
@@ -28,6 +29,19 @@ export function propBlockers(map: DungeonMap): Seg[] {
   const out: Seg[] = [];
   for (const p of map.props) {
     const def = PROP_BY_KIND[p.kind];
+    if (def?.walls) {
+      // murs propres à l'objet (porte fortifiée...) : segments locaux, en cases
+      const r = (p.rot * Math.PI) / 180;
+      const cs = Math.cos(r),
+        sn = Math.sin(r);
+      const T = (x: number, y: number): [number, number] => [p.x + x * cs - y * sn, p.y + x * sn + y * cs];
+      for (const [x1, y1, x2, y2, type] of def.walls(p.w, p.h)) {
+        const a = T(x1, y1),
+          b = T(x2, y2);
+        out.push({ x1: a[0], y1: a[1], x2: b[0], y2: b[1], type });
+      }
+      continue;
+    }
     if (!def?.blocks) continue;
     const pts: number[] = [];
     if (def.blocks === 'circle') {
@@ -58,6 +72,11 @@ export function propBlockers(map: DungeonMap): Seg[] {
     }
   }
   return out;
+}
+
+/** Obstacles hors murs de la grille : objets qui bloquent la vue, portes fortifiées, remparts. */
+export function obstacleSegments(map: DungeonMap): Seg[] {
+  return propBlockers(map).concat(rampartSegments(map));
 }
 
 const BLOCKS_LIGHT = new Set<number>([EDGE.WALL, EDGE.DOOR, EDGE.LOCKED, EDGE.SECRET]);
@@ -112,14 +131,19 @@ export class LightingCache {
   private polys = new Map<string, number[]>();
 
   private refresh(map: DungeonMap, geo: Geometry): void {
-    const sig = map.props
-      .filter((p) => PROP_BY_KIND[p.kind]?.blocks)
-      .map((p) => `${p.x},${p.y},${p.w},${p.h},${p.rot}`)
-      .join(';');
+    const sig =
+      map.props
+        .filter((p) => PROP_BY_KIND[p.kind]?.blocks || PROP_BY_KIND[p.kind]?.walls)
+        .map((p) => `${p.x},${p.y},${p.w},${p.h},${p.rot}`)
+        .join(';') +
+      '|' +
+      rampartSig(map);
     if (geo === this.geo && sig === this.sig) return;
     this.geo = geo;
     this.sig = sig;
-    this.segs = wallSegments(geo, 0.03).filter((s) => BLOCKS_LIGHT.has(s.type)).concat(propBlockers(map));
+    this.segs = wallSegments(geo, 0.03)
+      .concat(obstacleSegments(map))
+      .filter((s) => BLOCKS_LIGHT.has(s.type));
     this.polys.clear();
   }
 

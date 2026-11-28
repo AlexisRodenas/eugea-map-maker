@@ -1,7 +1,8 @@
-import { DungeonMap, LIGHT_ANIMS, Label, Light, Prop, SavedMap, T, WallStyle } from './model';
+import { DungeonMap, HatchSetting, LIGHT_ANIMS, Label, Light, Prop, Rampart, RampartStyle, SavedMap, T, WallStyle } from './model';
+import { RAMPART_STYLES, hitRampart } from './ramparts';
 import { History } from './history';
 import { Renderer } from './render';
-import { COLOR_KEYS, ResolvedTheme, THEMES, resolveTheme } from './themes';
+import { COLOR_KEYS, ResolvedTheme, THEMES, mapTheme } from './themes';
 import { PInfo, Tool, ToolOpts, createTools, defaultToolOpts } from './tools';
 import { PROP_BY_KIND, drawProp, hitProp, isRoof, isTile, propLayer } from './props';
 import { addAsset, assetImage, exportAssets, importAssets, isImageName, library, onAssetsChanged } from './assets';
@@ -17,7 +18,7 @@ const AUTOSAVE_KEY = 'eugea:autosave';
 const LEGACY_AUTOSAVE_KEY = 'jdr-map-maker:autosave';
 const BASE_SCALE = 32;
 
-type Obj = Prop | Light | Label;
+type Obj = Prop | Light | Label | Rampart;
 
 export class App {
   map: DungeonMap;
@@ -100,13 +101,17 @@ export class App {
   loadMap(src: DungeonMap, keepStyle = false): void {
     this.edit();
     const m = this.map;
-    const settings = keepStyle ? { ...src.settings, theme: m.settings.theme, colors: { ...m.settings.colors }, gridDistance: m.settings.gridDistance, gridUnits: m.settings.gridUnits, darkness: m.settings.darkness, showGrid: m.settings.showGrid } : src.settings;
+const ms = m.settings;
+    const settings = keepStyle
+      ? { ...src.settings, theme: ms.theme, colors: { ...ms.colors }, gridDistance: ms.gridDistance, gridUnits: ms.gridUnits, darkness: ms.darkness, showGrid: ms.showGrid, wallFx: ms.wallFx, hatch: ms.hatch, shadows: ms.shadows, vignette: ms.vignette }
+      : src.settings;
     m.name = src.name;
     m.cols = src.cols;
     m.rows = src.rows;
     m.levels = src.levels;
     m.cur = src.cur;
     m.settings = settings;
+    m.passages = src.passages;
     m.touchAll();
     this.afterStructureChange(true);
   }
@@ -130,7 +135,7 @@ export class App {
     }
     const cur = m.level;
     const src = gen.levels[0];
-    Object.assign(cur, { cells: src.cells, hEdges: src.hEdges, vEdges: src.vEdges, ground: src.ground, props: src.props, lights: src.lights, labels: src.labels });
+    Object.assign(cur, { cells: src.cells, hEdges: src.hEdges, vEdges: src.vEdges, ground: src.ground, props: src.props, lights: src.lights, labels: src.labels, ramparts: src.ramparts });
     m.settings.wallStyle = gen.settings.wallStyle;
     if (!keepStyle) m.settings = { ...gen.settings };
     m.touchAll();
@@ -275,7 +280,7 @@ export class App {
   }
 
   refreshTheme(): void {
-    this.theme = resolveTheme(this.map.settings.theme, this.map.settings.colors);
+    this.theme = mapTheme(this.map.settings);
     this.requestRender();
   }
 
@@ -665,7 +670,7 @@ export class App {
 
   // ---------- Sélection ----------
 
-  hitTest(wx: number, wy: number, kinds: ('label' | 'light' | 'prop')[] = ['label', 'light', 'prop']): string | null {
+  hitTest(wx: number, wy: number, kinds: ('label' | 'light' | 'prop' | 'rampart')[] = ['label', 'light', 'prop', 'rampart']): string | null {
     const m = this.map;
     if (kinds.includes('label')) {
       this.ctx.save();
@@ -692,12 +697,20 @@ export class App {
         if (hitProp(p, wx, wy)) return p.id;
       }
     }
+    if (kinds.includes('rampart')) {
+      for (let i = m.ramparts.length - 1; i >= 0; i--) if (hitRampart(m.ramparts[i], wx, wy)) return m.ramparts[i].id;
+    }
     return null;
   }
 
   selectedObjects(): Obj[] {
     const s = this.selection;
-    return [...this.map.props.filter((o) => s.has(o.id)), ...this.map.lights.filter((o) => s.has(o.id)), ...this.map.labels.filter((o) => s.has(o.id))];
+    return [
+      ...this.map.props.filter((o) => s.has(o.id)),
+      ...this.map.lights.filter((o) => s.has(o.id)),
+      ...this.map.labels.filter((o) => s.has(o.id)),
+      ...this.map.ramparts.filter((o) => s.has(o.id)),
+    ];
   }
 
   selectionChanged(): void {
@@ -707,7 +720,7 @@ export class App {
 
   private selectAll(): void {
     this.selectTool('select');
-    for (const o of [...this.map.props, ...this.map.lights, ...this.map.labels]) this.selection.add(o.id);
+    for (const o of [...this.map.props, ...this.map.lights, ...this.map.labels, ...this.map.ramparts]) this.selection.add(o.id);
     this.selectionChanged();
   }
 
@@ -727,8 +740,11 @@ export class App {
     this.map.props = this.map.props.filter((o) => !s.has(o.id));
     this.map.lights = this.map.lights.filter((o) => !s.has(o.id));
     this.map.labels = this.map.labels.filter((o) => !s.has(o.id));
+    const nr = this.map.ramparts.length;
+    this.map.ramparts = this.map.ramparts.filter((o) => !s.has(o.id));
+    this.map.passages = this.map.passages.filter((o) => !s.has(o.id));
     s.clear();
-    this.changed(false);
+    this.changed(nr !== this.map.ramparts.length);
     this.renderPanel();
   }
 
@@ -747,6 +763,11 @@ export class App {
     dup(this.map.props);
     dup(this.map.lights);
     dup(this.map.labels);
+    for (const r of this.map.ramparts.filter((x) => s.has(x.id))) {
+      const c = { ...r, pts: r.pts.slice(), id: uid(), x: r.x + 1, y: r.y + 1 };
+      this.map.ramparts.push(c);
+      ids.push(c.id);
+    }
     s.clear();
     ids.forEach((i) => s.add(i));
     this.changed(false);
@@ -839,6 +860,7 @@ export class App {
       ]);
     }
     const o = objs[0];
+    if ('pts' in o) return this.rampartInspector(o, ed, done, actions);
     if ('kind' in o) {
       const def = PROP_BY_KIND[o.kind];
       const asset = o.kind === 'image' && o.asset ? assetImage(o.asset) : null;
@@ -1017,6 +1039,52 @@ export class App {
     ]);
   }
 
+  private rampartInspector(r: Rampart, ed: () => void, done: () => void, actions: HTMLElement): HTMLElement {
+    const geo = () => {
+      done();
+      this.changed(true);
+    };
+    const n = r.pts.length / 2;
+    return this.sec('Rempart', [
+      field(
+        'Style',
+        segmented<RampartStyle>(RAMPART_STYLES, r.style, (v) => {
+          ed();
+          r.style = v;
+          geo();
+        }),
+      ),
+      field(
+        'Épaisseur',
+        range(r.width, 0.3, 3, 0.05, (v) => {
+          ed();
+          r.width = v;
+          this.requestRender();
+        }, (v) => `${v.toFixed(2)} case`),
+      ),
+      checkbox('Tours aux angles', r.towers, (v) => {
+        ed();
+        r.towers = v;
+        geo();
+      }),
+      checkbox('Enceinte fermée', r.closed, (v) => {
+        ed();
+        r.closed = v && n >= 3;
+        geo();
+        this.renderPanel();
+      }),
+      r.style === 'stone'
+        ? checkbox('Créneaux de l’autre côté', !!r.flip, (v) => {
+            ed();
+            r.flip = v;
+            geo();
+          })
+        : null,
+      h('p', { class: 'help' }, `${n} sommets. Outil Rempart (M) : glisser un sommet pour le déplacer, Maj + clic sur le rempart pour y percer une porte.`),
+      actions,
+    ]);
+  }
+
   private mapSection(): HTMLElement {
     const m = this.map;
     const s = m.settings;
@@ -1147,8 +1215,41 @@ export class App {
         ),
       ),
     );
+    const setS = (fn: () => void, geometry = false) => {
+      this.edit();
+      fn();
+      this.refreshTheme();
+      this.changed(geometry);
+      this.renderPanel();
+    };
     return this.sec('Style', [
       grid,
+      h('div', { class: 'sub' }, 'Effets'),
+      checkbox('Effets autour des murs', s.wallFx !== false, (v) => setS(() => (s.wallFx = v)), 'Hachures dans le vide et ombre le long des murs. Décochez pour des murs nets.'),
+      s.wallFx !== false
+        ? field(
+            'Hachures',
+            select<HatchSetting>(
+              [
+                ['auto', 'Selon le thème'],
+                ['clusters', 'Traits groupés'],
+                ['lines', 'Lignes'],
+                ['dots', 'Points'],
+                ['none', 'Aucune'],
+              ],
+              s.hatch ?? 'auto',
+              (v) => setS(() => (s.hatch = v)),
+            ),
+          )
+        : null,
+      checkbox('Ombres des objets', s.shadows !== false, (v) => setS(() => (s.shadows = v)), 'Ombre portée douce sous les objets, arbres et remparts'),
+      field(
+        'Vignette',
+        range(s.vignette ?? 0, 0, 1, 0.05, (v) => {
+          s.vignette = v;
+          this.requestRender();
+        }, (v) => (v ? `${Math.round(v * 100)}%` : 'aucune')),
+      ),
       h('div', { class: 'sub' }, 'Couleurs personnalisées'),
       colors,
       button('Réinitialiser les couleurs', () => {
@@ -1286,6 +1387,12 @@ export class App {
             {},
             'Objets → « Mes images » : connectez un dossier d’images (arbres, coffres, packs d’assets…) ou glissez des images sur la carte. Clic droit sur une image : la dessiner à la place d’un objet intégré, y compris dans les cartes générées. Les images sont enregistrées dans le fichier .eugea.json.',
           ),
+          h('h3', {}, 'Remparts et passages'),
+          h(
+            'p',
+            {},
+            'Rempart (M) : cliquez les sommets d’une muraille ou d’une palissade, double-clic pour finir ; Maj + clic sur un rempart pour y percer une porte. Passage (J) : un clic au départ, un clic à l’arrivée, sur le même étage ou un autre ; dans Foundry, le jeton est téléporté. Les escaliers sont reliés tout seuls à l’étage voisin.',
+          ),
         ),
         h(
           'div',
@@ -1302,6 +1409,8 @@ export class App {
             k('Q / Maj+molette', 'Pivoter objet'),
             k('Alt', 'Placement libre (sans grille)'),
             k('[ ]', 'Taille du pinceau'),
+            k('Alt+molette', 'Rayon du pinceau de dispersion'),
+            k('PageUp / PageDown', 'Changer d’étage'),
             k('Suppr', 'Supprimer la sélection'),
             k('Ctrl+D', 'Dupliquer'),
           ),
@@ -1309,7 +1418,7 @@ export class App {
           h(
             'p',
             {},
-            'Exporter → « Foundry VTT » : un seul fichier avec les images de chaque niveau, les murs, portes (normales, verrouillées, secrètes), fenêtres, lumières, objets séparés et toits en tuiles, et notes MJ cachées. Dans Foundry, avec le module « Eugéa Importer » : onglet Scènes → bouton « Importer une carte Eugéa ». En V14 les étages deviennent des niveaux natifs ; avant, une scène par étage.',
+            'Exporter → « Foundry VTT » : un seul fichier avec les images de chaque niveau, les murs, portes (normales, verrouillées, secrètes), fenêtres, remparts, lumières, objets séparés et toits en tuiles, escaliers et passages reliés (téléportation, Foundry v12+), et notes MJ cachées. Dans Foundry, avec le module « Eugéa Importer » : onglet Scènes → bouton « Importer une carte Eugéa ». En V14 les étages deviennent des niveaux natifs ; avant, une scène par étage.',
           ),
           h('p', {}, h('a', { href: MODULE_URL, target: '_blank', rel: 'noopener' }, 'Installer le module Eugéa Importer')),
         ),
