@@ -30,6 +30,7 @@ export function generateMaze(p: MazeParams): DungeonMap {
   const rng = new Rng(hashString(p.seed || 'labyrinthe'));
   const { cols, rows } = p;
   const map = new DungeonMap(cols, rows);
+  map.settings.darkness = 0.75; // souterrain : nuit dans Foundry (les torches comptent)
   map.name = 'Labyrinthe ' + p.seed;
   const C = Math.max(1, Math.min(4, p.corridor));
   const pitch = p.thin ? C : C + 1;

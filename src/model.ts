@@ -232,7 +232,7 @@ export function defaultSettings(): MapSettings {
     gridDistance: 1.5,
     gridUnits: 'm',
     showGrid: true,
-    darkness: 0.6,
+    darkness: 0,
     skins: {},
     wallFx: true,
     hatch: 'auto',
@@ -734,6 +734,8 @@ export interface SavedAsset {
   name: string;
   mime: string;
   data: string; // base64
+  /** Chemin dans les données de Foundry, si l'image y est déjà. */
+  src?: string;
 }
 
 /** Ancien format v1 (un seul niveau), toujours lisible. */

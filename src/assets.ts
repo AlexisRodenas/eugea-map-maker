@@ -16,6 +16,8 @@ export interface Asset {
   img: HTMLImageElement;
   w: number; // taille naturelle (px)
   h: number;
+  /** Chemin du fichier dans les données de Foundry (dossier connecté déclaré comme tel). */
+  src?: string;
 }
 
 const IMAGE_EXT: Record<string, string> = {
@@ -81,6 +83,7 @@ interface StoredAsset {
   name: string;
   mime: string;
   blob: Blob;
+  src?: string;
 }
 
 // ---------- Magasin ----------
@@ -157,13 +160,24 @@ export async function ensureAssets(ids: string[]): Promise<string[]> {
 }
 
 /** Ajoute une image au magasin (identifiant tiré de son contenu : pas de doublon). */
-export async function addAsset(blob: Blob, name: string): Promise<Asset> {
+export async function addAsset(blob: Blob, name: string, src?: string): Promise<Asset> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   const id = `img-${crc32(bytes).toString(16).padStart(8, '0')}-${bytes.length.toString(36)}`;
   const known = assets.get(id) ?? (await loadAsset(id));
-  if (known) return known;
+  if (known) {
+    // même image, désormais connue dans Foundry : on retient son chemin
+    if (src && known.src !== src) {
+      known.src = src;
+      try {
+        await idb('assets', 'readwrite', (st) => st.put({ id, name: known.name, mime: known.mime, blob: known.blob, src } as StoredAsset));
+      } catch {
+        /* sans gravité */
+      }
+    }
+    return known;
+  }
   const mime = blob.type || mimeOfName(name);
-  const s: StoredAsset = { id, name, mime, blob: new Blob([bytes], { type: mime }) };
+  const s: StoredAsset = { id, name, mime, blob: new Blob([bytes], { type: mime }), src };
   try {
     await idb('assets', 'readwrite', (st) => st.put(s));
   } catch (e) {
@@ -177,7 +191,7 @@ export async function exportAssets(ids: string[]): Promise<Record<string, SavedA
   const out: Record<string, SavedAsset> = {};
   for (const id of ids) {
     const a = await loadAsset(id);
-    if (a) out[id] = { name: a.name, mime: a.mime, data: bytesToBase64(new Uint8Array(await a.blob.arrayBuffer())) };
+    if (a) out[id] = { name: a.name, mime: a.mime, data: bytesToBase64(new Uint8Array(await a.blob.arrayBuffer())), ...(a.src ? { src: a.src } : {}) };
   }
   return out;
 }
@@ -187,7 +201,7 @@ export async function importAssets(rec: Record<string, SavedAsset> | undefined):
   if (!rec) return;
   for (const [id, sa] of Object.entries(rec)) {
     if (assets.has(id)) continue;
-    const s: StoredAsset = { id, name: sa.name, mime: sa.mime, blob: new Blob([base64ToBytes(sa.data)], { type: sa.mime }) };
+    const s: StoredAsset = { id, name: sa.name, mime: sa.mime, blob: new Blob([base64ToBytes(sa.data)], { type: sa.mime }), src: sa.src };
     try {
       await idb('assets', 'readwrite', (st) => st.put(s));
     } catch {
@@ -214,6 +228,8 @@ export type LibStatus = 'none' | 'permission' | 'scanning' | 'ready';
 
 interface LibPrefs {
   ppc: number; // pixels de l'image pour une case
+  /** Si le dossier connecté est dans les données de Foundry : son chemin (ex. assets/Owidyn/Map cuties). */
+  foundry?: string;
   folder: string;
   query: string;
 }
@@ -425,7 +441,8 @@ class Library {
   /** Copie l'image dans le magasin pour l'utiliser sur la carte. */
   async use(e: LibEntry): Promise<Asset> {
     const f = await e.getFile();
-    return addAsset(f, e.name);
+    const root = (this.prefs.foundry ?? '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    return addAsset(f, e.name, root ? `${root}/${e.path}` : undefined);
   }
 
   /** Taille par défaut sur la carte (en cases) selon la résolution de la bibliothèque. */

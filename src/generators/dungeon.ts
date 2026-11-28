@@ -1,5 +1,5 @@
-import { DungeonMap, EDGE, T } from '../model';
-import { Rng, hashString } from '../util';
+import { DungeonMap, EDGE, Level, T, levelName } from '../model';
+import { Rng, hashString, uid } from '../util';
 import { Dresser, Flavor, RoomInfo, RoomType, Shape, pickRoomType } from './dressing';
 
 export interface DungeonParams {
@@ -20,6 +20,8 @@ export interface DungeonParams {
   lights: number;
   flavor: Flavor;
   numbers: boolean;
+  /** Nombre de niveaux (les suivants sont des sous-sols reliés par des escaliers). */
+  levels?: number;
 }
 
 export const DEFAULT_DUNGEON: DungeonParams = {
@@ -100,10 +102,85 @@ interface Room extends RoomInfo {
   cy: number;
 }
 
+/**
+ * Donjon sur un ou plusieurs niveaux : chaque sous-sol est un donjon à part, relié au niveau
+ * du dessus par un escalier placé au même endroit sur les deux niveaux (salle creusée au besoin).
+ */
 export function generateDungeon(p: DungeonParams): DungeonMap {
+  const map = generateDungeonLevel(p);
+  const n = Math.max(1, Math.min(4, Math.round(p.levels ?? 1)));
+  const rng = new Rng(hashString((p.seed || 'donjon') + '-niveaux'));
+  for (let k = 1; k < n; k++) {
+    const sub = generateDungeonLevel({ ...p, seed: `${p.seed}-${k}` });
+    const src = sub.levels[0];
+    const lv = new Level(p.cols, p.rows, -k, levelName(-k));
+    Object.assign(lv, { cells: src.cells, hEdges: src.hEdges, vEdges: src.vEdges, ground: src.ground, props: src.props, lights: src.lights, labels: src.labels });
+    const upper = map.levels.find((l) => l.z === -(k - 1))!;
+    linkLevels(map, upper, lv, rng);
+    map.levels.push(lv);
+  }
+  map.levels.sort((a, b) => a.z - b.z);
+  map.cur = map.levels.findIndex((l) => l.z === 0);
+  map.touchAll();
+  return map;
+}
+
+/** Escalier entre deux niveaux superposés : emplacement libre en haut, salle creusée en bas et reliée. */
+function linkLevels(map: DungeonMap, up: Level, down: Level, rng: Rng): void {
+  const { cols, rows } = map;
+  const floor = (l: Level, x: number, y: number) => x >= 0 && y >= 0 && x < cols && y < rows && l.cells[y * cols + x] !== 0;
+  const busy = (l: Level, x: number, y: number) =>
+    l.props.some((q) => {
+      const r = Math.max(q.w, q.h) / 2 + 0.3;
+      return Math.abs(q.x - (x + 0.5)) < r + 0.5 && Math.abs(q.y - (y + 1)) < r + 1;
+    });
+  const cand: [number, number][] = [];
+  for (let y = 2; y < rows - 3; y++)
+    for (let x = 2; x < cols - 2; x++) {
+      let ok = true;
+      for (let yy = y - 1; yy <= y + 2 && ok; yy++) for (let xx = x - 1; xx <= x + 1; xx++) if (!floor(up, xx, yy)) ok = false;
+      if (ok && !busy(up, x, y)) cand.push([x, y]);
+    }
+  if (!cand.length) return;
+  const [x, y] = rng.pick(cand);
+  // en bas : petite salle sous l'escalier, reliée à la case de sol la plus proche
+  const T0 = T.STONE;
+  const inStamp = (xx: number, yy: number) => xx >= x - 1 && xx <= x + 1 && yy >= y - 1 && yy <= y + 2;
+  for (let yy = y - 1; yy <= y + 2; yy++) for (let xx = x - 1; xx <= x + 1; xx++) if (!floor(down, xx, yy)) down.cells[yy * cols + xx] = T0;
+  down.props = down.props.filter((q) => !(Math.abs(q.x - (x + 0.5)) < 2 && Math.abs(q.y - (y + 1)) < 2.5));
+  let best: [number, number] | null = null,
+    bd = Infinity;
+  for (let yy = 0; yy < rows; yy++)
+    for (let xx = 0; xx < cols; xx++) {
+      if (!floor(down, xx, yy) || inStamp(xx, yy)) continue;
+      const d = Math.abs(xx - x) + Math.abs(yy - y);
+      if (d < bd) {
+        bd = d;
+        best = [xx, yy];
+      }
+    }
+  if (best && bd > 2) {
+    let cx = x,
+      cy = y;
+    while (cx !== best[0]) {
+      cx += Math.sign(best[0] - cx);
+      if (!floor(down, cx, cy)) down.cells[cy * cols + cx] = T0;
+    }
+    while (cy !== best[1]) {
+      cy += Math.sign(best[1] - cy);
+      if (!floor(down, cx, cy)) down.cells[cy * cols + cx] = T0;
+    }
+  }
+  const stairs = (l: Level) => l.props.push({ id: uid(), kind: 'stairs', x: x + 0.5, y: y + 1, w: 1, h: 2, rot: 0, gmOnly: false });
+  stairs(up);
+  stairs(down);
+}
+
+function generateDungeonLevel(p: DungeonParams): DungeonMap {
   const rng = new Rng(hashString(p.seed || 'donjon'));
   const { cols, rows } = p;
   const map = new DungeonMap(cols, rows);
+  map.settings.darkness = 0.75; // souterrain : nuit dans Foundry (les torches comptent)
   map.name = 'Donjon ' + p.seed;
   const roomId = new Int16Array(cols * rows).fill(-1);
   const corridor = new Uint8Array(cols * rows);

@@ -32,6 +32,7 @@ export function generateCave(p: CaveParams): DungeonMap {
   const seedN = hashString(p.seed) % 1000;
   const { cols, rows } = p;
   const map = new DungeonMap(cols, rows);
+  map.settings.darkness = 0.75; // souterrain : nuit dans Foundry (les torches comptent)
   map.name = 'Grotte ' + p.seed;
   const M = 2;
   let wall = new Uint8Array(cols * rows).fill(1);

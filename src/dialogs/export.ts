@@ -1,7 +1,12 @@
 import type { App } from '../app';
 import {
+  AMBIANCES,
+  Ambiance,
   ImageFormat,
   MAX_SIDE,
+  TileMode,
+  ambianceOf,
+  isPlanMap,
   blobToBase64,
   canvasToBlob,
   computeCrop,
@@ -15,13 +20,14 @@ import {
   renderPropImage,
   roofElevation,
   staticTile,
+  tileParts,
   tileProps,
   universalVTT,
 } from '../export';
 import { assetImage, ensureAssets, extOfMime } from '../assets';
 import { MODULE_URL } from '../links';
 import { Prop } from '../model';
-import { isRoof } from '../props';
+import type { TilePart } from '../export';
 import { button, checkbox, field, h, modal, segmented, select, toast } from '../ui';
 import { downloadBlob, slugify } from '../util';
 import { makeZip, ZipEntry } from '../zip';
@@ -41,9 +47,13 @@ interface ExportState {
   margin: number;
   gmView: boolean;
   gmDrawings: boolean;
-  tiles: boolean;
+  tileMode: TileMode;
+  /** Lumière de la scène Foundry : jour, crépuscule, nuit, ou d'après l'obscurité de la carte. */
+  ambiance: Ambiance | 'map';
   roofs: boolean;
   imageDir: string;
+  /** Archive sans module : version de Foundry visée (la position des tuiles a changé en V14). */
+  zipGen: 'v14' | 'v12';
 }
 
 const TARGETS: { id: Target; title: string; desc: string; badge?: string }[] = [
@@ -78,9 +88,11 @@ function load(): ExportState {
     margin: 1,
     gmView: false,
     gmDrawings: true,
-    tiles: true,
+    tileMode: 'all',
+    ambiance: 'map',
     roofs: false,
     imageDir: 'maps',
+    zipGen: 'v14',
   };
   try {
     return { ...d, ...JSON.parse(localStorage.getItem(STORE) || '{}') };
@@ -178,11 +190,53 @@ export function openExport(app: App): void {
         updateInfo();
       }),
     );
-    if (isFoundry)
+    if (isFoundry) {
+      const auto = ambianceOf(app.map.settings.darkness);
       optsEl.append(
-        checkbox('Objets séparés en tuiles (coffres, tonneaux, caisses…)', st.tiles, (v) => (st.tiles = v), 'Chaque objet marqué « séparé » devient une tuile Foundry indépendante (déplaçable, masquable). Sinon il est dessiné dans le fond. Les toits sont toujours des tuiles.'),
+        field(
+          'Lumière',
+          segmented<Ambiance | 'map'>(
+            [['map', `Selon la carte (${AMBIANCES.find((a) => a[0] === auto)![1].toLowerCase()})`] as [Ambiance | 'map', string], ...AMBIANCES.map(([id, label]) => [id, label] as [Ambiance | 'map', string])],
+            st.ambiance,
+            (v) => (st.ambiance = v),
+          ),
+        ),
+        field(
+          'Objets',
+          select<TileMode>(
+            [
+              ['all', 'Tous en tuiles (recommandé)'],
+              ['separate', 'Seulement les objets « séparés »'],
+              ['none', 'Dessinés dans le fond'],
+            ],
+            st.tileMode,
+            (v) => (st.tileMode = v),
+          ),
+        ),
+        h(
+          'p',
+          { class: 'help' },
+          isPlanMap(app.map)
+            ? 'Plan de ville ou carte du monde : tout est dessiné dans l’image (toits compris), sans tuiles.'
+            : 'En tuiles, chaque meuble, arbre ou objet se déplace, se cache ou se supprime dans Foundry ; le fond ne garde que les sols, murs, portes et terrains. Les arbres donnent deux tuiles : le tronc au sol et le feuillage, qui s’efface quand un jeton passe dessous. Les toits sont toujours des tuiles.',
+        ),
         checkbox('Numéros et textes MJ → dessins cachés', st.gmDrawings, (v) => (st.gmDrawings = v)),
         checkbox('Afficher aussi la grille Foundry', st.foundryGrid, (v) => (st.foundryGrid = v)),
+      );
+    }
+    if (t === 'foundry-json')
+      optsEl.append(
+        field(
+          'Version de Foundry',
+          segmented<'v14' | 'v12'>(
+            [
+              ['v14', 'V14 et plus'],
+              ['v12', 'v11 à v13'],
+            ],
+            st.zipGen,
+            (v) => (st.zipGen = v),
+          ),
+        ),
       );
     if (t === 'foundry-json') {
       const dir = h('input', { type: 'text', value: st.imageDir, class: 'grow' });
@@ -223,7 +277,9 @@ export function openExport(app: App): void {
       const ext = extOf(format);
       const tileFormat: ImageFormat = format === 'jpeg' ? 'png' : format;
       const levelSlug = (i: number) => (nLevels > 1 ? `${slug}-${slugify(map.levels[i].name)}` : slug);
-      const renderLevel = async (i: number) => {
+      const tileMode: TileMode = !isFoundry ? 'none' : isPlanMap(map) ? 'flat' : st.tileMode;
+      const ambiance: Ambiance = st.ambiance === 'map' ? ambianceOf(map.settings.darkness) : st.ambiance;
+      const renderLevel = async (i: number, transparent = false) => {
         status(nLevels > 1 ? `Niveau ${i + 1}/${nLevels}…` : 'Rendu de l’image…');
         await tick();
         const canvas = renderLevelImage(map, i, crop, {
@@ -231,38 +287,37 @@ export function openExport(app: App): void {
           mode: isFoundry || !st.gmView ? 'player' : 'gm',
           grid: st.grid,
           lighting: st.lighting,
-          separateTiles: isFoundry && st.tiles,
+          tiles: tileMode,
           roofs: st.target === 'image' && st.roofs,
+          transparent,
         });
-        return canvasToBlob(canvas, format);
+        // transparence : WebP ou PNG (le JPEG n'a pas de canal alpha)
+        return canvasToBlob(canvas, transparent && format === 'jpeg' ? 'webp' : format);
       };
+      /** Étage au-dessus du rez-de-chaussée : image transparente hors du sol en plus (niveaux natifs V14). */
+      const isUpper = (i: number) => map.levels[i].z > 0;
       // Tuiles (Foundry) : une image par objet distinct
       // (les images personnelles sont reprises telles quelles, sans perte)
-      const tileImages = async (): Promise<Map<string, { blob: Blob; ext: string; mime: string }>> => {
-        const props = new Map<string, Prop>();
+      const tileImages = async (): Promise<Map<string, { blob: Blob; ext: string; mime: string; src?: string }>> => {
+        const props = new Map<string, [Prop, TilePart]>();
         for (let i = 0; i < nLevels; i++) {
           const view = map.levelView(i);
-          for (const p of tileProps(view)) if (st.tiles || p.gmOnly || isRoof(p)) props.set(propImageKey(p, view), p);
+          for (const p of tileProps(view, tileMode)) for (const part of tileParts(view, p)) props.set(propImageKey(p, view, part), [p, part]);
         }
-        const out = new Map<string, { blob: Blob; ext: string; mime: string }>();
+        const out = new Map<string, { blob: Blob; ext: string; mime: string; src?: string }>();
         let k = 0;
-        for (const [key, p] of props) {
+        for (const [key, [p, part]] of props) {
           if (k++ % 10 === 0) {
             status(`Objets ${k}/${props.size}…`);
             await tick();
           }
           const a = key.startsWith('asset-') ? assetImage(key.slice(6)) : null;
-          if (a) out.set(key, { blob: a.blob, mime: a.mime, ext: extOfMime(a.mime) });
-          else out.set(key, { blob: await canvasToBlob(renderPropImage(map, p, st.ppg), tileFormat), mime: mimeOf(tileFormat), ext: extOf(tileFormat) });
+          if (a) out.set(key, { blob: a.blob, mime: a.mime, ext: extOfMime(a.mime), src: a.src });
+          else out.set(key, { blob: await canvasToBlob(renderPropImage(map, p, st.ppg, part), tileFormat), mime: mimeOf(tileFormat), ext: extOf(tileFormat) });
         }
         return out;
       };
-      const levelsData = () =>
-        map.levels.map((_, i) => {
-          const lv = foundryLevel(map, i, crop, st.ppg, `level-${i}`, st.gmDrawings);
-          if (!st.tiles) lv.tiles = lv.tiles.filter((t) => t.hidden || t.roof);
-          return lv;
-        });
+      const levelsData = () => map.levels.map((_, i) => foundryLevel(map, i, crop, st.ppg, `level-${i}`, st.gmDrawings, tileMode, isUpper(i) ? `level-${i}-over` : undefined));
 
       if (st.target === 'image') {
         const files: ZipEntry[] = [];
@@ -278,17 +333,24 @@ export function openExport(app: App): void {
         if (files.length === 1) downloadBlob(new Blob([files[0].data]), files[0].name);
         else downloadBlob(await makeZip(files), `${slug}-dd2vtt.zip`);
       } else if (st.target === 'foundry') {
-        const images: Record<string, { name: string; mime: string; data: string }> = {};
-        for (let i = 0; i < nLevels; i++) images[`level-${i}`] = { name: `${levelSlug(i)}.${ext}`, mime: mimeOf(format), data: await blobToBase64(await renderLevel(i)) };
-        for (const [key, t] of await tileImages()) images[key] = { name: `${key}.${t.ext}`, mime: t.mime, data: await blobToBase64(t.blob) };
+        const images: Record<string, { name: string; mime: string; data?: string; foundry?: string }> = {};
+        for (let i = 0; i < nLevels; i++) {
+          images[`level-${i}`] = { name: `${levelSlug(i)}.${ext}`, mime: mimeOf(format), data: await blobToBase64(await renderLevel(i)) };
+          if (isUpper(i)) {
+            const fmt: ImageFormat = format === 'jpeg' ? 'webp' : format;
+            images[`level-${i}-over`] = { name: `${levelSlug(i)}-transparent.${extOf(fmt)}`, mime: mimeOf(fmt), data: await blobToBase64(await renderLevel(i, true)) };
+          }
+        }
+        // images déjà dans Foundry : seulement leur chemin (le module ne les renvoie pas)
+        for (const [key, t] of await tileImages()) images[key] = t.src ? { name: `${key}.${t.ext}`, mime: t.mime, foundry: t.src } : { name: `${key}.${t.ext}`, mime: t.mime, data: await blobToBase64(t.blob) };
         status('Assemblage…');
         await tick();
         const pack = {
           format: 'eugea-scene',
-          version: 4,
+          version: 5,
           name,
           slug,
-          scene: foundryBaseScene(map, crop, st.ppg, st.foundryGrid),
+          scene: foundryBaseScene(map, crop, st.ppg, st.foundryGrid, ambiance),
           levels: levelsData(),
           links: foundryLinks(map, crop, st.ppg),
           images,
@@ -298,7 +360,7 @@ export function openExport(app: App): void {
         const base = `${st.imageDir ? st.imageDir + '/' : ''}${slug}`;
         const files: ZipEntry[] = [];
         const tiles = await tileImages();
-        for (const [key, t] of tiles) files.push({ name: `${slug}/tiles/${key}.${t.ext}`, data: t.blob });
+        for (const [key, t] of tiles) if (!t.src) files.push({ name: `${slug}/tiles/${key}.${t.ext}`, data: t.blob });
         const roofZ = roofElevation(map);
         const levels = levelsData();
         for (let i = 0; i < nLevels; i++) {
@@ -306,13 +368,16 @@ export function openExport(app: App): void {
           files.push({ name: `${slug}/${img}`, data: await renderLevel(i) });
           const lv = levels[i];
           const scene = {
-            ...foundryBaseScene(map, crop, st.ppg, st.foundryGrid),
+            ...foundryBaseScene(map, crop, st.ppg, st.foundryGrid, ambiance),
             name: nLevels > 1 ? `${name} — ${lv.name}` : name,
             background: { src: `${base}/${img}` },
             walls: lv.walls,
             lights: lv.lights,
             drawings: lv.drawings,
-            tiles: lv.tiles.map((t) => ({ ...staticTile(t, roofZ), texture: { src: `${base}/tiles/${t.image}.${tiles.get(String(t.image))?.ext ?? extOf(tileFormat)}` } })),
+            tiles: lv.tiles.map((t) => {
+              const ti = tiles.get(String(t.image));
+              return { ...staticTile(t, roofZ, st.zipGen === 'v14'), texture: { src: ti?.src ?? `${base}/tiles/${t.image}.${ti?.ext ?? extOf(tileFormat)}` } };
+            }),
             notes: [],
             tokens: [],
             sounds: [],

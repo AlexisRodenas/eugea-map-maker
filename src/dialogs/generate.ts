@@ -6,16 +6,21 @@ import { CaveParams, DEFAULT_CAVE, generateCave } from '../generators/cave';
 import { DEFAULT_MAZE, MazeParams, generateMaze } from '../generators/maze';
 import { DEFAULT_FOREST, ForestParams, generateForest } from '../generators/forest';
 import { DEFAULT_VILLAGE, VillageParams, generateVillage } from '../generators/village';
+import { CityParams, DEFAULT_CITY, generateCity } from '../generators/city';
+import { DEFAULT_WORLD, WorldParams, generateWorld } from '../generators/world';
 import { FLAVORS } from '../generators/dressing';
 import { PROP_BY_KIND } from '../props';
 import { mapTheme } from '../themes';
 import { button, checkbox, field, h, modal, range, segmented, select, toast } from '../ui';
 import { randomSeed } from '../util';
 
-type Kind = 'dungeon' | 'cave' | 'maze' | 'forest' | 'village';
+type Kind = 'dungeon' | 'cave' | 'maze' | 'forest' | 'village' | 'city' | 'world';
 
 /** Thème conseillé par type de carte (null : garder le thème actuel). */
-const SUGGESTED_THEME: Record<Kind, string | null> = { dungeon: null, maze: null, cave: 'caverne', forest: 'pleinair', village: 'pleinair' };
+const SUGGESTED_THEME: Record<Kind, string | null> = { dungeon: null, maze: null, cave: 'caverne', forest: 'pleinair', village: 'pleinair', city: 'pleinair', world: 'parchemin' };
+
+/** Plans (ville, monde) : leur échelle et leur affichage priment sur ceux de la carte actuelle. */
+const PLAN: Kind[] = ['city', 'world'];
 
 type Spec =
   | { key: string; label: string; type: 'int'; min: number; max: number; step?: number }
@@ -54,6 +59,7 @@ const SPECS: Record<Kind, Spec[]> = {
     { key: 'props', label: 'Mobilier', type: 'pct' },
     { key: 'lights', label: 'Éclairage', type: 'pct' },
     { key: 'numbers', label: 'Numéroter les salles (MJ)', type: 'bool' },
+    { key: 'levels', label: 'Niveaux (sous-sols reliés)', type: 'int', min: 1, max: 4 },
   ],
   cave: [
     ...SIZE,
@@ -82,7 +88,6 @@ const SPECS: Record<Kind, Spec[]> = {
     { key: 'clearing', label: 'Clairière avec campement', type: 'bool' },
     { key: 'ruins', label: 'Ruines anciennes', type: 'bool' },
     { key: 'winter', label: 'Hiver (neige, sapins)', type: 'bool' },
-    { key: 'canopy', label: 'Cimes des arbres en toits (Foundry)', type: 'bool' },
     { key: 'props', label: 'Sous-bois', type: 'pct' },
     { key: 'lights', label: 'Éclairage', type: 'pct' },
   ],
@@ -95,6 +100,7 @@ const SPECS: Record<Kind, Spec[]> = {
     { key: 'fields', label: 'Champs clôturés', type: 'pct' },
     { key: 'trees', label: 'Arbres', type: 'pct' },
     { key: 'interiors', label: 'Mobilier intérieur', type: 'pct' },
+    { key: 'floors', label: 'Maisons à étage', type: 'pct' },
     { key: 'lights', label: 'Lanternes', type: 'pct' },
     { key: 'names', label: 'Noms des bâtiments (MJ)', type: 'bool' },
     { key: 'roofs', label: 'Toits (s’effacent quand on entre, touche K)', type: 'bool' },
@@ -109,10 +115,52 @@ const SPECS: Record<Kind, Spec[]> = {
       ],
     },
   ],
+  city: [
+    { key: 'cols', label: 'Largeur', type: 'int', min: 60, max: 260 },
+    { key: 'rows', label: 'Hauteur', type: 'int', min: 50, max: 200 },
+    {
+      key: 'size',
+      label: 'Agglomération',
+      type: 'select',
+      options: [
+        ['bourg', 'Bourg rural (maisons le long des routes)'],
+        ['ville', 'Ville'],
+        ['cite', 'Grande cité'],
+      ],
+    },
+    { key: 'districts', label: 'Quartiers', type: 'int', min: 4, max: 30 },
+    { key: 'density', label: 'Densité du bâti', type: 'pct' },
+    { key: 'walls', label: 'Remparts et portes', type: 'bool' },
+    { key: 'castle', label: 'Château', type: 'bool' },
+    { key: 'river', label: 'Rivière et ponts', type: 'bool' },
+    { key: 'countryside', label: 'Campagne (champs, bois, fermes)', type: 'pct' },
+    { key: 'names', label: 'Noms (ville, quartiers, monuments)', type: 'bool' },
+  ],
+  world: [
+    { key: 'cols', label: 'Largeur', type: 'int', min: 60, max: 260 },
+    { key: 'rows', label: 'Hauteur', type: 'int', min: 50, max: 200 },
+    {
+      key: 'shape',
+      label: 'Forme',
+      type: 'select',
+      options: [
+        ['continent', 'Continent'],
+        ['archipel', 'Archipel'],
+        ['interieur', 'Terres intérieures'],
+      ],
+    },
+    { key: 'sea', label: 'Océans', type: 'pct' },
+    { key: 'mountains', label: 'Montagnes', type: 'pct' },
+    { key: 'forests', label: 'Forêts', type: 'pct' },
+    { key: 'rivers', label: 'Rivières', type: 'int', min: 0, max: 30 },
+    { key: 'cities', label: 'Villes', type: 'int', min: 2, max: 30 },
+    { key: 'roads', label: 'Routes entre les villes', type: 'bool' },
+    { key: 'names', label: 'Noms (villes, mers, montagnes)', type: 'bool' },
+  ],
 };
 
 const STORE = 'eugea:generator';
-const KINDS: Kind[] = ['dungeon', 'cave', 'maze', 'forest', 'village'];
+const KINDS: Kind[] = ['dungeon', 'cave', 'maze', 'forest', 'village', 'city', 'world'];
 
 interface State {
   kind: Kind;
@@ -122,6 +170,8 @@ interface State {
   maze: MazeParams;
   forest: ForestParams;
   village: VillageParams;
+  city: CityParams;
+  world: WorldParams;
 }
 
 function loadState(): State {
@@ -133,6 +183,8 @@ function loadState(): State {
     maze: { ...DEFAULT_MAZE },
     forest: { ...DEFAULT_FOREST },
     village: { ...DEFAULT_VILLAGE },
+    city: { ...DEFAULT_CITY },
+    world: { ...DEFAULT_WORLD },
   };
   try {
     const s = JSON.parse(localStorage.getItem(STORE) || 'null');
@@ -149,7 +201,7 @@ function loadState(): State {
 
 export function openGenerator(app: App, size?: { cols: number; rows: number }): void {
   const st = loadState();
-  if (size) for (const k of KINDS) Object.assign(st[k], size);
+  if (size) for (const k of KINDS) if (!PLAN.includes(k)) Object.assign(st[k], size);
   let current: DungeonMap | null = null;
   const renderer = new Renderer();
   const preview = h('canvas', { class: 'gen-preview' });
@@ -166,6 +218,8 @@ export function openGenerator(app: App, size?: { cols: number; rows: number }): 
       else if (st.kind === 'cave') current = generateCave(st.cave);
       else if (st.kind === 'maze') current = generateMaze(st.maze);
       else if (st.kind === 'forest') current = generateForest(st.forest);
+      else if (st.kind === 'city') current = generateCity(st.city);
+      else if (st.kind === 'world') current = generateWorld(st.world);
       else current = generateVillage(st.village);
     } catch (err) {
       console.error(err);
@@ -174,12 +228,16 @@ export function openGenerator(app: App, size?: { cols: number; rows: number }): 
     }
     // réglages : ceux de la carte actuelle, sauf le style de murs (et le thème si « adapté »)
     const s = app.map.settings;
+    const g = current.settings;
     const sugg = st.adaptTheme ? SUGGESTED_THEME[st.kind] : null;
     current.settings = {
       ...structuredClone(s),
-      wallStyle: current.settings.wallStyle,
+      wallStyle: g.wallStyle,
       theme: sugg ?? s.theme,
       colors: sugg && sugg !== s.theme ? {} : { ...s.colors },
+      darkness: g.darkness,
+      skins: s.skins,
+      ...(PLAN.includes(st.kind) ? { gridDistance: g.gridDistance, gridUnits: g.gridUnits, showGrid: g.showGrid, vignette: g.vignette } : {}),
     };
     draw();
     const ms = Math.round(performance.now() - t0);
@@ -250,6 +308,8 @@ export function openGenerator(app: App, size?: { cols: number; rows: number }): 
       ['maze', 'Labyrinthe'],
       ['forest', 'Forêt'],
       ['village', 'Village'],
+      ['city', 'Plan de ville'],
+      ['world', 'Monde'],
     ],
     st.kind,
     (k) => {
@@ -274,7 +334,8 @@ export function openGenerator(app: App, size?: { cols: number; rows: number }): 
         st.adaptTheme = v;
         regen();
       }),
-      multi ? h('p', { class: 'help' }, `La carte générée remplacera uniquement le niveau « ${app.map.level.name} ».`) : null,
+      multi ? h('p', { class: 'help' }, `Une carte d’un seul niveau remplacera uniquement le niveau « ${app.map.level.name} » ; une carte à étages remplace toute la carte.`) : null,
+      PLAN.includes(st.kind) ? h('p', { class: 'help' }, st.kind === 'world' ? 'Carte du monde : 1 case = 5 km, sans grille. Montagnes, forêts et villes sont des pictogrammes modifiables (Objets → Cartes).' : 'Plan de ville : 1 case = 5 m, sans grille. Les maisons sont des toits ; remparts et portes deviennent des murs dans Foundry.') : null,
     ),
     h(
       'div',

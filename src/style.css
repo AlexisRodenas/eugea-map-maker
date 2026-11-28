@@ -31,7 +31,7 @@ body {
 
 #app {
   display: grid;
-  grid-template-columns: 56px 1fr 312px;
+  grid-template-columns: 64px 1fr 312px;
   grid-template-rows: 48px 1fr 28px;
   grid-template-areas:
     'top top top'
@@ -197,29 +197,56 @@ kbd {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 0;
-  gap: 4px;
+  padding: 6px 0;
+  gap: 2px;
   overflow-y: auto;
+}
+.tool-group {
+  width: 100%;
+  margin: 6px 0 2px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--muted);
+  opacity: 0.75;
+  border-top: 1px solid var(--line);
+  padding-top: 5px;
+}
+.tool-group:first-child {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
 }
 
 .tool {
   position: relative;
-  width: 42px;
-  height: 42px;
-  padding: 0;
+  width: 56px;
+  height: 46px;
+  padding: 3px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
   background: transparent;
   border-color: transparent;
   color: #c4c8d2;
 }
+.tool .tool-name {
+  font-size: 9.5px;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0.85;
+}
 .tool kbd {
   position: absolute;
-  right: 1px;
-  bottom: 1px;
+  right: 2px;
+  top: 2px;
   font-size: 8px;
-  padding: 1px 2px;
+  padding: 0 2px;
   border: none;
   background: transparent;
-  opacity: 0.7;
+  opacity: 0.55;
 }
 .tool.on {
   background: rgba(227, 169, 75, 0.18);
@@ -1027,6 +1054,12 @@ button.link {
 }
 button.link:hover:not(:disabled) {
   text-decoration: underline;
+}
+
+/* Recherche d'objets */
+.prop-search {
+  width: 100%;
+  margin-bottom: 8px;
 }
 
 /* Pinceau de dispersion */

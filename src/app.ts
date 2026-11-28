@@ -103,7 +103,7 @@ export class App {
     const m = this.map;
 const ms = m.settings;
     const settings = keepStyle
-      ? { ...src.settings, theme: ms.theme, colors: { ...ms.colors }, gridDistance: ms.gridDistance, gridUnits: ms.gridUnits, darkness: ms.darkness, showGrid: ms.showGrid, wallFx: ms.wallFx, hatch: ms.hatch, shadows: ms.shadows, vignette: ms.vignette }
+      ? { ...src.settings, theme: ms.theme, colors: { ...ms.colors }, gridDistance: ms.gridDistance, gridUnits: ms.gridUnits, showGrid: ms.showGrid, wallFx: ms.wallFx, hatch: ms.hatch, shadows: ms.shadows, vignette: ms.vignette }
       : src.settings;
     m.name = src.name;
     m.cols = src.cols;
@@ -121,7 +121,7 @@ const ms = m.settings;
    * (les autres sont redimensionnés au besoin pour rester superposables).
    */
   applyGenerated(gen: DungeonMap, keepStyle: boolean): void {
-    if (this.map.levels.length <= 1) {
+    if (this.map.levels.length <= 1 || gen.levels.length > 1) {
       this.loadMap(gen, keepStyle);
       return;
     }
@@ -590,10 +590,22 @@ const ms = m.settings;
   private buildToolbar(): void {
     const tb = document.getElementById('toolbar')!;
     tb.innerHTML = '';
-    for (const t of this.tools) {
-      const b = h('button', { class: 'tool', 'data-tool': t.id, title: `${t.name} (${t.key.toUpperCase()})`, type: 'button' }, icon(t.icon), h('kbd', {}, t.key.toUpperCase()));
-      b.addEventListener('click', () => this.selectTool(t.id));
-      tb.append(b);
+    // groupes : construire la structure, décorer, se déplacer
+    const groups: [string, string[]][] = [
+      ['Vue', ['select', 'pan']],
+      ['Bâtir', ['room', 'brush', 'erase', 'fill', 'terrain', 'wall', 'door', 'rampart']],
+      ['Décorer', ['prop', 'light', 'text', 'passage']],
+    ];
+    const short: Record<string, string> = { select: 'Sélect.', fill: 'Remplir', terrain: 'Terrain', passage: 'Passage' };
+    for (const [title, ids] of groups) {
+      tb.append(h('div', { class: 'tool-group' }, title));
+      for (const id of ids) {
+        const t = this.tools.find((x) => x.id === id);
+        if (!t) continue;
+        const b = h('button', { class: 'tool', 'data-tool': t.id, title: `${t.name} (${t.key.toUpperCase()}) — ${t.hint}`, type: 'button' }, icon(t.icon), h('span', { class: 'tool-name' }, short[t.id] ?? t.name), h('kbd', {}, t.key.toUpperCase()));
+        b.addEventListener('click', () => this.selectTool(t.id));
+        tb.append(b);
+      }
     }
   }
 
@@ -1160,13 +1172,30 @@ const ms = m.settings;
         ),
       ),
       field(
+        'Ambiance',
+        segmented<string>(
+          [
+            ['0', 'Jour'],
+            ['0.4', 'Crépuscule'],
+            ['0.8', 'Nuit'],
+          ],
+          s.darkness < 0.2 ? '0' : s.darkness < 0.6 ? '0.4' : '0.8',
+          (v) => {
+            this.edit();
+            s.darkness = parseFloat(v);
+            this.changed(false);
+            this.renderPanel();
+          },
+        ),
+      ),
+      field(
         'Obscurité',
         range(s.darkness, 0, 1, 0.05, (v) => {
           s.darkness = v;
           this.changed(false);
         }, (v) => `${Math.round(v * 100)}%`),
       ),
-      h('p', { class: 'help' }, 'Obscurité de la scène Foundry et de l’aperçu d’éclairage (touche I).'),
+      h('p', { class: 'help' }, 'Lumière de la scène Foundry (jour : tout est éclairé ; nuit : seules les lumières éclairent) et de l’aperçu d’éclairage (touche I). Modifiable aussi à l’export.'),
     ]);
   }
 
@@ -1297,7 +1326,8 @@ const ms = m.settings;
   private newMap(): void {
     let cols = 40,
       rows = 30,
-      outdoor = false;
+      outdoor = false,
+      scale = 'combat';
     const cIn = numberInput(cols, { min: 8, max: 300, onChange: (v) => (cols = v) });
     const rIn = numberInput(rows, { min: 8, max: 300, onChange: (v) => (rows = v) });
     const presets: [string, number, number][] = [
@@ -1333,6 +1363,20 @@ const ms = m.settings;
           (v) => (outdoor = v === 'out'),
         ),
       ),
+      field(
+        'Échelle',
+        select<string>(
+          [
+            ['combat', 'Carte de combat — 1 case = 1,5 m'],
+            ['plan', 'Plan de ville — 1 case = 5 m'],
+            ['region', 'Région — 1 case = 100 m'],
+            ['world', 'Monde — 1 case = 5 km'],
+          ],
+          scale,
+          (v) => (scale = v),
+        ),
+      ),
+      h('p', { class: 'help' }, 'Plans, régions et mondes : pas de grille, objets « Cartes » (montagnes, villes, bosquets…) et générateurs « Plan de ville » et « Monde ».'),
       h(
         'div',
         { class: 'modal-foot' },
@@ -1344,8 +1388,12 @@ const ms = m.settings;
           md.close();
           const m = new DungeonMap(cols, rows);
           m.name = 'Nouvelle carte';
-          if (outdoor) m.ground.fill(T.GRASS);
+          if (outdoor || scale !== 'combat') m.ground.fill(T.GRASS);
           m.settings = { ...structuredClone(this.map.settings), wallStyle: 'straight' };
+          const sc: Record<string, [number, string, boolean]> = { combat: [1.5, 'm', true], plan: [5, 'm', false], region: [100, 'm', false], world: [5, 'km', false] };
+          const [dist, units, grid] = sc[scale];
+          Object.assign(m.settings, { gridDistance: dist, gridUnits: units, showGrid: grid, darkness: outdoor || scale !== 'combat' ? 0 : m.settings.darkness });
+          if (scale === 'world') m.settings.theme = 'parchemin';
           this.loadMap(m);
           this.view.scale = BASE_SCALE;
           this.view.ox = -2;
@@ -1387,6 +1435,12 @@ const ms = m.settings;
             {},
             'Objets → « Mes images » : connectez un dossier d’images (arbres, coffres, packs d’assets…) ou glissez des images sur la carte. Clic droit sur une image : la dessiner à la place d’un objet intégré, y compris dans les cartes générées. Les images sont enregistrées dans le fichier .eugea.json.',
           ),
+          h('h3', {}, 'Générateurs'),
+          h(
+            'p',
+            {},
+            'Ctrl+G : donjon (sur plusieurs niveaux), grotte, labyrinthe, forêt, village aux bâtiments aménagés et à étages, plan de ville (1 case = 5 m) et carte du monde (1 case = 5 km).',
+          ),
           h('h3', {}, 'Remparts et passages'),
           h(
             'p',
@@ -1418,7 +1472,7 @@ const ms = m.settings;
           h(
             'p',
             {},
-            'Exporter → « Foundry VTT » : un seul fichier avec les images de chaque niveau, les murs, portes (normales, verrouillées, secrètes), fenêtres, remparts, lumières, objets séparés et toits en tuiles, escaliers et passages reliés (téléportation, Foundry v12+), et notes MJ cachées. Dans Foundry, avec le module « Eugéa Importer » : onglet Scènes → bouton « Importer une carte Eugéa ». En V14 les étages deviennent des niveaux natifs ; avant, une scène par étage.',
+            'Exporter → « Foundry VTT » : un seul fichier avec les images de chaque niveau, les murs, portes (normales, verrouillées, secrètes), fenêtres, remparts, lumières, chaque objet en tuile (arbres : tronc + feuillage au-dessus des jetons), toits, escaliers et passages reliés (téléportation, Foundry v12+), notes MJ cachées, et la lumière choisie (jour, crépuscule, nuit). Dans Foundry, avec le module « Eugéa Importer » : onglet Scènes → bouton « Importer une carte Eugéa ». En V14 les étages deviennent des niveaux natifs ; avant, une scène par étage.',
           ),
           h('p', {}, h('a', { href: MODULE_URL, target: '_blank', rel: 'noopener' }, 'Installer le module Eugéa Importer')),
         ),

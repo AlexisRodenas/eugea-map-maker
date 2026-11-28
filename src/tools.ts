@@ -829,6 +829,7 @@ export function createTools(app: App): Tool[] {
     let ghost: Prop | null = null;
     let cat = PROP_BY_KIND[opts.propKind]?.cat || (opts.propKind === 'image' ? MINE : PROP_CATS[0]);
     let area: { x0: number; y0: number; x1: number; y1: number } | null = null;
+    let query = '';
     const snapPos = (p: { wx: number; wy: number; alt: boolean }, pr: Prop) => {
       const b = propBounds({ ...pr, x: 0, y: 0 });
       const fw = b.x1 - b.x0,
@@ -1051,8 +1052,31 @@ export function createTools(app: App): Tool[] {
       },
       panel: () => {
         const content = h('div', {});
+        const search = h('input', { type: 'search', placeholder: 'Rechercher un objet (tonneau, toit, arbre…)', class: 'prop-search', value: query });
         const fill = () => {
           content.innerHTML = '';
+          const q = query.trim().toLowerCase();
+          if (q) {
+            // recherche dans tout le catalogue (sans les accents)
+            const norm = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+            const nq = norm(q);
+            const hits = PROPS.filter((d) => d.cat && (norm(d.name).includes(nq) || norm(d.cat).includes(nq) || d.kind.toLowerCase().includes(nq)));
+            const grid = h('div', { class: 'prop-grid' });
+            for (const def of hits) {
+              const cv = h('canvas', { width: 96, height: 96 });
+              app.drawThumb(cv, def.kind);
+              const b = h('button', { class: 'prop-btn' + (opts.propKind === def.kind ? ' on' : ''), title: `${def.name} (${def.cat})`, type: 'button' }, cv, h('span', {}, def.name));
+              b.addEventListener('click', () => {
+                opts.propKind = def.kind;
+                cat = def.cat;
+                grid.querySelectorAll('.prop-btn').forEach((x) => x.classList.remove('on'));
+                b.classList.add('on');
+              });
+              grid.append(b);
+            }
+            content.append(hits.length ? grid : h('p', { class: 'muted' }, 'Aucun objet ne correspond.'));
+            return;
+          }
           if (cat === MINE) {
             content.append(
               libraryView(app, opts.propAssetPath, (a, e) => {
@@ -1094,6 +1118,10 @@ export function createTools(app: App): Tool[] {
             );
         };
         fill();
+        search.addEventListener('input', () => {
+          query = search.value;
+          fill();
+        });
         const tabs = segmented<string>(
           [...PROP_CATS.map((c) => [c, c] as [string, string]), [MINE, MINE]],
           cat,
@@ -1137,6 +1165,7 @@ export function createTools(app: App): Tool[] {
         };
         fillScatter();
         return section('Objets', [
+          search,
           tabs,
           content,
           scatterBox,

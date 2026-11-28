@@ -1,118 +1,12 @@
-import { EDGE, LightAnim, Prop } from './model';
+import { EDGE, Prop } from './model';
 import type { PropPalette } from './themes';
 import { Asset, assetImage } from './assets';
 import { Rng, hashString, rgba, lighten, darken, mix } from './util';
+import { Ctx, DrawEnv, PropDef, PropLight, blob, circle, flame, fs, line, poly, rrect, st } from './draw';
+import { FURNITURE } from './furniture';
+import { MAP_ICONS } from './mapicons';
 
-type Ctx = CanvasRenderingContext2D;
-
-export interface DrawEnv {
-  c: Ctx;
-  w: number;
-  h: number;
-  pal: PropPalette;
-  rng: Rng;
-  lw: number;
-}
-
-export interface PropLight {
-  radius: number;
-  color: string;
-  anim: LightAnim;
-  intensity: number;
-}
-
-export interface PropDef {
-  kind: string;
-  name: string;
-  cat: string;
-  w: number;
-  h: number;
-  layer?: number; // 0 : au sol (tapis), 1 : normal, 2 : dessus
-  blocks?: 'circle' | 'rect'; // bloque la vue dans Foundry / l'aperçu
-  light?: PropLight;
-  gmOnly?: boolean;
-  /** Exporté par défaut comme tuile séparée dans Foundry (coffres, tonneaux...). */
-  tile?: boolean;
-  /** Dessin aléatoire (dépend de l'identifiant de l'objet). */
-  rand?: boolean;
-  /** « Toit » : au-dessus des jetons dans Foundry, s'efface quand un jeton passe dessous. */
-  roof?: boolean;
-  /** Se pose en glissant un rectangle (toits, auvents). */
-  area?: boolean;
-  /** Ombre portée (défaut : objets posés au-dessus du sol, hors sources de lumière). */
-  shadow?: boolean;
-  /** Murs Foundry propres à l'objet : segments locaux [x1, y1, x2, y2, EDGE.*] (porte fortifiée...). */
-  walls?: (w: number, h: number) => [number, number, number, number, number][];
-  draw: (e: DrawEnv) => void;
-}
-
-// ---------- Aides de dessin ----------
-
-function circle(c: Ctx, x: number, y: number, r: number): void {
-  c.beginPath();
-  c.arc(x, y, r, 0, Math.PI * 2);
-}
-
-function rrect(c: Ctx, x: number, y: number, w: number, h: number, r: number): void {
-  r = Math.min(r, w / 2, h / 2);
-  c.beginPath();
-  c.moveTo(x + r, y);
-  c.arcTo(x + w, y, x + w, y + h, r);
-  c.arcTo(x + w, y + h, x, y + h, r);
-  c.arcTo(x, y + h, x, y, r);
-  c.arcTo(x, y, x + w, y, r);
-  c.closePath();
-}
-
-function poly(c: Ctx, pts: number[]): void {
-  c.beginPath();
-  c.moveTo(pts[0], pts[1]);
-  for (let i = 2; i < pts.length; i += 2) c.lineTo(pts[i], pts[i + 1]);
-  c.closePath();
-}
-
-function fs(e: DrawEnv, fill: string | CanvasGradient, stroke: string = e.pal.ink, lw = e.lw): void {
-  e.c.fillStyle = fill;
-  e.c.fill();
-  if (lw > 0) {
-    e.c.lineWidth = lw;
-    e.c.strokeStyle = stroke;
-    e.c.stroke();
-  }
-}
-
-function st(e: DrawEnv, stroke: string = e.pal.ink, lw = e.lw): void {
-  e.c.lineWidth = lw;
-  e.c.strokeStyle = stroke;
-  e.c.stroke();
-}
-
-function line(c: Ctx, x1: number, y1: number, x2: number, y2: number): void {
-  c.moveTo(x1, y1);
-  c.lineTo(x2, y2);
-}
-
-function blob(rng: Rng, r: number, n: number, jit: number): number[] {
-  const pts: number[] = [];
-  const off = rng.float(0, Math.PI * 2);
-  for (let i = 0; i < n; i++) {
-    const a = off + (i / n) * Math.PI * 2;
-    const rr = r * (1 + rng.float(-jit, jit));
-    pts.push(Math.cos(a) * rr, Math.sin(a) * rr);
-  }
-  return pts;
-}
-
-function flame(e: DrawEnv, x: number, y: number, r: number): void {
-  const c = e.c;
-  const g = c.createRadialGradient(x, y, 0, x, y, r);
-  g.addColorStop(0, '#fff6c8');
-  g.addColorStop(0.35, e.pal.fire);
-  g.addColorStop(1, rgba(e.pal.fire, 0));
-  circle(c, x, y, r);
-  c.fillStyle = g;
-  c.fill();
-}
+export type { DrawEnv, PropDef, PropLight } from './draw';
 
 /**
  * Feuillage vu du dessus : contour en lobes, volume éclairé en haut à gauche,
@@ -120,6 +14,16 @@ function flame(e: DrawEnv, x: number, y: number, r: number): void {
  */
 function foliage(e: DrawEnv, R: number, color: string, lobes = 11, clumps = 7): void {
   const { c, rng, pal } = e;
+  const tr = c.getTransform();
+  if (Math.hypot(tr.a, tr.b) * R < 12) {
+    // vu de loin : un disque ombré suffit (plans de ville, grandes forêts)
+    circle(c, 0, 0, R * 0.92);
+    const g = c.createRadialGradient(-R * 0.35, -R * 0.4, 0, 0, 0, R);
+    g.addColorStop(0, lighten(color, 0.22));
+    g.addColorStop(1, darken(color, 0.3));
+    fs(e, g, pal.ink, e.lw * 1.6);
+    return;
+  }
   const ring: [number, number, number][] = [];
   const off = rng.float(0, 6.28);
   for (let i = 0; i < lobes; i++) {
@@ -189,9 +93,51 @@ function foliage(e: DrawEnv, R: number, color: string, lobes = 11, clumps = 7): 
   c.restore();
 }
 
+/** Tronc vu du dessus : racines, écorce, cernes (sous le feuillage ; tuile au sol dans Foundry). */
+function trunk(e: DrawEnv, R: number, conifer = false): void {
+  const { c, rng, pal } = e;
+  const r = R * (conifer ? 0.13 : 0.17);
+  const bark = conifer ? mix(pal.woodDark, '#4a3424', 0.4) : pal.woodDark;
+  // racines
+  const n = rng.int(4, 6);
+  const off = rng.float(0, 6.28);
+  for (let k = 0; k < n; k++) {
+    const a = off + (k / n) * Math.PI * 2 + rng.float(-0.25, 0.25);
+    const L = r * rng.float(1.9, 2.8);
+    c.beginPath();
+    c.moveTo(Math.cos(a - 0.35) * r * 0.8, Math.sin(a - 0.35) * r * 0.8);
+    c.quadraticCurveTo(Math.cos(a) * L * 0.6, Math.sin(a) * L * 0.6, Math.cos(a) * L, Math.sin(a) * L);
+    c.quadraticCurveTo(Math.cos(a) * L * 0.6 + Math.cos(a + 1.6) * r * 0.15, Math.sin(a) * L * 0.6 + Math.sin(a + 1.6) * r * 0.15, Math.cos(a + 0.35) * r * 0.8, Math.sin(a + 0.35) * r * 0.8);
+    c.closePath();
+    fs(e, bark, pal.ink, e.lw * 0.7);
+  }
+  circle(c, 0, 0, r);
+  const g = c.createRadialGradient(-r * 0.3, -r * 0.3, 0, 0, 0, r);
+  g.addColorStop(0, lighten(bark, 0.25));
+  g.addColorStop(1, darken(bark, 0.15));
+  fs(e, g, pal.ink, e.lw);
+  c.beginPath();
+  c.arc(0, 0, r * 0.62, 0, Math.PI * 2);
+  c.moveTo(r * 0.3, 0);
+  c.arc(0, 0, r * 0.3, 0, Math.PI * 2);
+  st(e, rgba(darken(bark, 0.4), 0.6), e.lw * 0.5);
+}
+
 /** Conifère vu du dessus : couronnes d'aiguilles superposées, de la plus sombre à la plus claire. */
 function conifer(e: DrawEnv, R: number, color: string): void {
   const { c, rng, pal } = e;
+  const tr = c.getTransform();
+  if (Math.hypot(tr.a, tr.b) * R < 12) {
+    const pts: number[] = [];
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const r = R * (i % 2 ? 0.75 : 1);
+      pts.push(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    poly(c, pts);
+    fs(e, darken(color, 0.12), pal.ink, e.lw * 1.4);
+    return;
+  }
   const layers = 4;
   for (let L = 0; L < layers; L++) {
     const f = 1 - L * 0.22;
@@ -244,6 +190,19 @@ function roofDraw(e: DrawEnv, base: string, style: RoofStyle): void {
     y0 = -D / 2,
     half = D / 2;
   const ink = darken(base, 0.55);
+  // petit à l'écran (plans de ville) : dessin simplifié, beaucoup plus rapide
+  const tr = c.getTransform();
+  if (Math.hypot(tr.a, tr.b) * Math.min(L, D) < 26) {
+    c.fillStyle = lighten(base, 0.12);
+    c.fillRect(x0, y0, L, half);
+    c.fillStyle = darken(base, 0.18);
+    c.fillRect(x0, 0, L, half);
+    c.beginPath();
+    c.rect(x0, y0, L, D);
+    st(e, e.pal.ink, e.lw);
+    c.restore();
+    return;
+  }
   // pans : éclairé (haut) et à l'ombre (bas), plus sombres vers l'égout
   const g1 = c.createLinearGradient(0, 0, 0, y0);
   g1.addColorStop(0, lighten(base, 0.18));
@@ -1062,7 +1021,13 @@ export const PROPS: PropDef[] = [
     w: 2,
     h: 2,
     layer: 2,
-    draw: (e) => foliage(e, (Math.min(e.w, e.h) / 2) * 0.96, mix(e.pal.plant, '#4f7f35', 0.25 + e.rng.float(-0.15, 0.15)), 11, 7),
+    canopy: true,
+    draw: (e) => {
+      const R = (Math.min(e.w, e.h) / 2) * 0.96;
+      const col = mix(e.pal.plant, '#4f7f35', 0.25 + e.rng.float(-0.15, 0.15));
+      if (e.part === 'trunk') trunk(e, R);
+      else foliage(e, R, col, 11, 7);
+    },
   },
   {
     kind: 'bush',
@@ -1190,7 +1155,12 @@ export const PROPS: PropDef[] = [
     h: 2,
     layer: 2,
     rand: true,
-    draw: (e) => conifer(e, (Math.min(e.w, e.h) / 2) * 0.96, mix(e.pal.plant, '#2f5d3a', 0.35)),
+    canopy: true,
+    draw: (e) => {
+      const R = (Math.min(e.w, e.h) / 2) * 0.96;
+      if (e.part === 'trunk') trunk(e, R, true);
+      else conifer(e, R, mix(e.pal.plant, '#2f5d3a', 0.35));
+    },
   },
   {
     kind: 'stump',
@@ -1792,6 +1762,10 @@ export const PROPS: PropDef[] = [
       st(e, lighten(col, 0.2), e.lw * 0.6);
     },
   },
+  // Mobilier des bâtiments (furniture.ts)
+  ...FURNITURE,
+  // Pictogrammes des cartes du monde et des plans (mapicons.ts)
+  ...MAP_ICONS,
   // Image personnelle (bibliothèque) : dessinée par drawProp, absente du catalogue
   { kind: 'image', name: 'Image', cat: '', w: 1, h: 1, draw: () => undefined },
 ];
@@ -1849,7 +1823,12 @@ function drawMissing(c: Ctx, p: Prop, pal: PropPalette): void {
   c.setLineDash([]);
 }
 
-export function drawProp(c: Ctx, p: Prop, pal: PropPalette, skins?: Skins): void {
+/** Arbre exporté en deux tuiles (tronc au sol, feuillage au-dessus des jetons) ? Pas s'il est habillé d'une image. */
+export function hasCanopy(p: Prop, skins?: Skins): boolean {
+  return !!PROP_BY_KIND[p.kind]?.canopy && !propAsset(p, skins);
+}
+
+export function drawProp(c: Ctx, p: Prop, pal: PropPalette, skins?: Skins, part?: 'trunk' | 'canopy'): void {
   const def = PROP_BY_KIND[p.kind];
   if (!def) return;
   c.save();
@@ -1861,7 +1840,7 @@ export function drawProp(c: Ctx, p: Prop, pal: PropPalette, skins?: Skins): void
   const a = aid ? assetImage(aid) : null;
   if (a) drawAsset(c, p, a);
   else if (p.kind === 'image') drawMissing(c, p, pal);
-  else def.draw({ c, w: p.w, h: p.h, pal, rng: new Rng(seedOf(p.id)), lw: 0.045 });
+  else def.draw({ c, w: p.w, h: p.h, pal, rng: new Rng(seedOf(p.id)), lw: 0.045, part });
   c.restore();
 }
 

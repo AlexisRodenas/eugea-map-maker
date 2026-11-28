@@ -1,7 +1,7 @@
 import { DungeonMap, EDGE, Prop, T } from './model';
 import { GeoCache, Geometry, Portal, TerrainGeo } from './geometry';
 import { LightingCache, allLights } from './lighting';
-import { castsShadow, drawProp, isRoof, propBounds, propLayer, shadowOffset } from './props';
+import { castsShadow, drawProp, hasCanopy, isRoof, propBounds, propLayer, shadowOffset } from './props';
 import { drawRamparts, strokeRampartOutline } from './ramparts';
 import type { ResolvedTheme } from './themes';
 import { hash2, luminance, mix, rgba } from './util';
@@ -29,6 +29,8 @@ export interface RenderOpts {
   roofs?: 'show' | 'ghost' | 'hide';
   /** Passages (éditeur) : niveau affiché, pour marquer leurs extrémités. */
   passages?: boolean;
+  /** Fond transparent hors du sol (étages : la rue reste visible en dessous dans Foundry). */
+  transparent?: boolean;
 }
 
 // ---------- Texture de papier (tuile périodique) ----------
@@ -161,8 +163,11 @@ export class Renderer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = theme.bg;
-    ctx.fillRect(0, 0, o.width, o.height);
+    if (o.transparent) ctx.clearRect(0, 0, o.width, o.height);
+    else {
+      ctx.fillStyle = theme.bg;
+      ctx.fillRect(0, 0, o.width, o.height);
+    }
     ctx.setTransform(scale, 0, 0, scale, -ox * scale, -oy * scale);
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
@@ -190,7 +195,7 @@ export class Renderer {
     }
 
     // Hachures (uniquement dans le vide)
-    if (theme.hatchStyle !== 'none') {
+    if (theme.hatchStyle !== 'none' && !o.transparent) {
       ctx.strokeStyle = theme.hatch;
       ctx.lineWidth = Math.max(theme.hatchLine, 0.7 * px);
       for (const p of this.geo.hatch.visible(vx0, vy0, vx1, vy1)) ctx.stroke(p);
@@ -259,6 +264,15 @@ export class Renderer {
       .sort((a, b) => a[1] - b[1] || a[2] - b[2]);
     let shadowsDone = map.settings.shadows === false;
     for (const [p, layer] of props) {
+      if (roofs === 'ghost' && hasCanopy(p, skins)) {
+        // arbres : le tronc, et le feuillage estompé
+        drawProp(ctx, p, theme.pal, skins, 'trunk');
+        ctx.save();
+        ctx.globalAlpha = 0.22;
+        drawProp(ctx, p, theme.pal, skins, 'canopy');
+        ctx.restore();
+        continue;
+      }
       if (!shadowsDone && layer >= 1) {
         // ombres de tous les objets posés, sous eux, en une seule passe floutée
         this.drawShadows(ctx, props.map((x) => x[0]).filter(castsShadow), theme, o, skins);
@@ -293,7 +307,7 @@ export class Renderer {
     // Éclairage
     if (o.lighting) this.drawLighting(ctx, map, geo, o);
 
-    // Grain de papier
+    // Grain de papier (étage transparent : seulement sur le sol)
     if (theme.paper > 0) {
       let pat = this.patterns.get(ctx);
       if (!pat) {
@@ -301,14 +315,16 @@ export class Renderer {
         this.patterns.set(ctx, pat);
       }
       pat.setTransform(new DOMMatrix([8 / 256, 0, 0, 8 / 256, 0, 0]));
+      ctx.save();
+      if (o.transparent) ctx.clip(geo.floorPath);
       ctx.globalAlpha = theme.paper;
       ctx.fillStyle = pat;
       ctx.fillRect(vx0, vy0, vx1 - vx0, vy1 - vy0);
-      ctx.globalAlpha = 1;
+      ctx.restore();
     }
 
     // Vignette : bords de la carte assombris
-    const vg = map.settings.vignette ?? 0;
+    const vg = o.transparent ? 0 : map.settings.vignette ?? 0;
     if (vg > 0) {
       const cx = map.cols / 2,
         cy = map.rows / 2;

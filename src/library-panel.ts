@@ -184,6 +184,11 @@ export function libraryView(app: App, selected: string, onPick: (a: Asset, e: Li
       );
   };
   fillGrid();
+  const foundryIn = h('input', { type: 'text', class: 'grow', placeholder: 'assets/mon-dossier', value: prefs.foundry ?? '' });
+  foundryIn.addEventListener('change', () => {
+    prefs.foundry = foundryIn.value.trim();
+    library.savePrefs();
+  });
   add(
     head,
     library.folders.length ? field('Dossier', folderSel) : null,
@@ -204,6 +209,12 @@ export function libraryView(app: App, selected: string, onPick: (a: Asset, e: Li
       h('span', { class: 'muted' }, 'px = 1 case'),
     ),
     h('p', { class: 'help' }, 'Clic droit sur une image : l’utiliser à la place d’un objet intégré (arbres, coffres…), y compris dans les cartes générées.'),
+    field('Dans Foundry', foundryIn),
+    h(
+      'p',
+      { class: 'help' },
+      'Si ce dossier est déjà dans les données de Foundry, indiquez son chemin depuis Data (par exemple « assets/Owidyn/Map cuties ») : l’export réutilisera ces fichiers au lieu de les recopier.',
+    ),
     skinsList(app),
   );
   return root;

@@ -1,6 +1,6 @@
 # Eugéa
 
-**Éditeur de cartes pour le jeu de rôle** : donjons, grottes, labyrinthes, forêts, villages et villes fortifiées, sur plusieurs étages, avec un **export direct vers Foundry VTT** où tout est déjà posé : murs, portes, remparts, lumières, objets séparés, toits, niveaux, escaliers et passages reliés.
+**Éditeur de cartes pour le jeu de rôle** : cartes de combat (donjons, grottes, labyrinthes, forêts, villages, tavernes sur plusieurs étages), plans de ville et cartes du monde, avec un **export direct vers Foundry VTT** où tout est déjà posé : murs, portes, remparts, lumières, chaque objet en tuile, toits, niveaux, escaliers et passages reliés, jour ou nuit.
 
 Rapide même sur de grandes cartes, entièrement dans le navigateur, sans compte ni serveur.
 
@@ -40,7 +40,9 @@ Le travail est **sauvegardé automatiquement** dans le navigateur. `Ctrl+S` tél
 
 **Toits** : chaume, tuiles, ardoise, bardeaux, auvents, frondaisons. Un toit se pose en glissant un rectangle, ou d'un clic sur « Couvrir chaque bâtiment ». N'importe quel objet (arbre, pont, image…) peut aussi devenir un toit. Dans Foundry, les toits passent au-dessus des jetons et s'effacent quand un jeton entre dessous. La touche `K` permet de voir à travers pour travailler l'intérieur.
 
-**Vos images** (onglet *Objets → Mes images*) : connectez un dossier d'images (PNG, WebP, SVG… par exemple un pack d'assets), avec recherche et sous-dossiers, ou glissez des images directement sur la carte. Une image peut aussi **remplacer le dessin d'un objet intégré** (vos arbres à la place des arbres d'Eugéa, vos coffres…), y compris dans les cartes générées, avec plusieurs variantes tirées au hasard. Dans Foundry, elles deviennent des tuiles avec le fichier d'origine, sans perte de qualité.
+**Vos images** (onglet *Objets → Mes images*) : connectez un dossier d'images (PNG, WebP, SVG… par exemple un pack d'assets), avec recherche et sous-dossiers, ou glissez des images directement sur la carte. Une image peut aussi **remplacer le dessin d'un objet intégré** (vos arbres à la place des arbres d'Eugéa, vos coffres…), y compris dans les cartes générées, avec plusieurs variantes tirées au hasard. Dans Foundry, elles deviennent des tuiles avec le fichier d'origine, sans perte de qualité. Si le dossier est déjà dans les données de Foundry, indiquez son chemin (*Dans Foundry*) : l'export réutilise les fichiers au lieu de les recopier.
+
+**Arbres** : un tronc et un feuillage. Dans Foundry, le feuillage passe au-dessus des jetons et s'efface quand un jeton passe dessous ; la touche `K` montre les troncs dans l'éditeur.
 
 **Infos MJ** : portes secrètes, pièges, numéros et textes « MJ » n'apparaissent pas dans l'image des joueurs (touche `P` pour prévisualiser).
 
@@ -48,10 +50,13 @@ Le travail est **sauvegardé automatiquement** dans le navigateur. `Ctrl+S` tél
 
 **Générateurs aléatoires** (`Ctrl+G`), avec aperçu en direct et graine reproductible :
 - **Donjon** : salles dispersées ou compactes, couloirs, boucles, portes, salles rondes / en croix / à colonnes, eau. Une ambiance (crypte, forteresse, temple, repaire) décide du mobilier de chaque salle.
+- **Donjon sur plusieurs niveaux** : sous-sols reliés par des escaliers placés au même endroit.
 - **Grotte** : automate cellulaire, tunnels, eau et lave, stalagmites, cristaux lumineux.
 - **Labyrinthe** : murs pleins ou fins, salles, culs-de-sac réglables, trésors et pièges.
 - **Forêt** : sentier sinueux et embranchements, ruisseau avec pont, clairière avec campement, ruines, version hivernale, cimes des arbres en toits.
-- **Village / ville** : rues, place centrale avec puits ou fontaine, maisons, taverne, forge, échoppes, chapelle, granges, intérieurs meublés, portes et fenêtres, **toits**, champs clôturés, rivière et ponts, lanternes, **enceinte** (palissade ou muraille) ; rues pavées et étals en mode ville.
+- **Village / ville** : rues, place centrale avec puits ou fontaine, maisons, taverne, forge, échoppes, chapelle, granges, **bâtiments aménagés de façon réaliste** (taverne avec comptoir, tabourets, cheminée, cuisine, réserve et chambres à l'étage ; maisons avec salle commune, chambres et étage ; forge avec foyer et enclume…), abords (potagers, bûches, abreuvoirs, enseignes, cimetière), **toits**, champs clôturés, rivière et ponts, lanternes, **enceinte** (palissade ou muraille) ; rues pavées et étals en mode ville.
+- **Plan de ville** (1 case = 5 m) : grande cité fortifiée en quartiers, ville ou bourg rural ; rues, place du marché, cathédrale, château, remparts et portes, rivière et ponts, campagne alentour, noms des quartiers.
+- **Monde** (1 case = 5 km) : continent, archipel ou terres intérieures ; côtes, rivières, montagnes et forêts en pictogrammes, villes reliées par des routes, mers et montagnes nommées, rose des vents.
 
 ![Générateur](docs/generateur.jpg)
 
@@ -59,10 +64,10 @@ Le travail est **sauvegardé automatiquement** dans le navigateur. `Ctrl+S` tél
 
 | Format | Contenu |
 | --- | --- |
-| **Foundry VTT** (`.foundry.json`) | Un seul fichier, tout est posé à l'import : images de chaque niveau, murs, portes, fenêtres, remparts, lumières, **objets séparés et toits en tuiles**, étages, **escaliers et passages reliés**, notes MJ en dessins cachés. S'importe avec le module **[Eugéa Importer](https://github.com/AlexisRodenas/eugea-importer)**. |
+| **Foundry VTT** (`.foundry.json`) | Un seul fichier, tout est posé à l'import : images de chaque niveau, murs, portes, fenêtres, remparts, lumières, **chaque objet en tuile** (meubles, arbres en tronc + feuillage, toits), étages, **escaliers et passages reliés**, notes MJ en dessins cachés, **jour ou nuit**. S'importe avec le module **[Eugéa Importer](https://github.com/AlexisRodenas/eugea-importer)**. |
 | **Universal VTT** (`.dd2vtt`) | Pour le module *Universal Battlemap Importer* et les autres VTT compatibles. Un fichier par niveau. |
 | **Image** (WebP / PNG / JPEG) | Impression, Roll20, Owlbear, Discord… Version joueurs ou MJ, avec ou sans les toits. |
-| **Scènes JSON + images** (`.zip`) | Sans module : à décompresser dans `Data/`, puis *Importer des données* sur une scène. |
+| **Scènes JSON + images** (`.zip`) | Sans module : à décompresser dans `Data/`, puis *Importer des données* sur une scène. Choisissez la version de Foundry (V14 et plus, ou v11 à v13). |
 
 **Étages dans Foundry** : sur Foundry **V14**, une carte à plusieurs étages devient une seule scène avec des **niveaux natifs**, et les escaliers sont reliés par des zones « Changer de niveau ». Sur V11 à V13, ou si vous le choisissez dans les réglages du module, chaque étage devient une scène, regroupées dans un dossier et accessibles depuis la barre de navigation.
 
@@ -107,13 +112,15 @@ npm run build    # dist/index.html autonome (un seul fichier)
 
 Code dans `src/` : `model.ts` (carte, niveaux, passages), `geometry.ts` (contours, lissage, hachures), `render.ts` (rendu Canvas), `lighting.ts` (visibilité), `props.ts` (objets et toits), `ramparts.ts` (remparts), `assets.ts` (images personnelles), `generators/` (donjon, grotte, labyrinthe, forêt, village), `export.ts` (Foundry, Universal VTT, image), `app.ts`, `tools.ts` et `tools-extra.ts` (interface).
 
+Les nouveautés de chaque version sont dans le [journal des modifications](CHANGELOG.md).
+
 Les contributions sont les bienvenues : ouvrez une [issue](https://github.com/AlexisRodenas/eugea-map-maker/issues) pour signaler un bug ou proposer une idée.
 
 ---
 
 ### English
 
-Eugéa is a browser-based TTRPG battle map editor: dungeons, caves, mazes, forests, villages and walled towns, multi-floor, with your own image folder (assets can also replace the built-in drawings), a scatter brush, city walls and palisades, and roofs that fade when tokens walk under them. Export to Foundry VTT is fully set up: walls, doors, ramparts, lights, separate object tiles, roof tiles, native Scene Levels on V14, and stairs and passages turned into teleport regions (v12+). Try it at [alexisrodenas.github.io/eugea-map-maker](https://alexisrodenas.github.io/eugea-map-maker/), and install the [Eugéa Importer](https://github.com/AlexisRodenas/eugea-importer) module with the manifest link above. The interface is in French.
+Eugéa is a browser-based TTRPG map editor: battle maps (dungeons, caves, mazes, forests, villages with realistically furnished multi-floor buildings), city plans and world maps, with your own image folder (assets can also replace the built-in drawings), a scatter brush, city walls and palisades, and roofs and tree canopies that fade when tokens walk under them. Export to Foundry VTT is fully set up: walls, doors, ramparts, lights, separate object tiles, roof tiles, native Scene Levels on V14, and stairs and passages turned into teleport regions (v12+). Try it at [alexisrodenas.github.io/eugea-map-maker](https://alexisrodenas.github.io/eugea-map-maker/), and install the [Eugéa Importer](https://github.com/AlexisRodenas/eugea-importer) module with the manifest link above. The interface is in French.
 
 ## Licence
 

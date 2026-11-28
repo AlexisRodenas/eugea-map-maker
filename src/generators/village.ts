@@ -1,7 +1,7 @@
-import { DungeonMap, EDGE, Rampart, T } from '../model';
+import { DungeonMap, Rampart, T } from '../model';
 import { cutGate, hitRampart } from '../ramparts';
 import { Rng, fbm, hashString, uid } from '../util';
-import { Dresser, RoomInfo, RoomType } from './dressing';
+import { Building, BuildingKind, BuiltBuilding, buildGround, buildUpper } from './buildings';
 import { Placer, distField, wobblyLine } from './outdoor';
 
 export interface VillageParams {
@@ -15,6 +15,7 @@ export interface VillageParams {
   fields: number;
   trees: number;
   interiors: number;
+  floors: number; // part des bâtiments avec un étage (0..1) ; les tavernes en ont toujours un
   lights: number;
   names: boolean;
   roofs: boolean; // toits (tuiles Foundry au-dessus des jetons)
@@ -32,13 +33,14 @@ export const DEFAULT_VILLAGE: VillageParams = {
   fields: 0.4,
   trees: 0.5,
   interiors: 0.8,
+  floors: 0.4,
   lights: 0.5,
   names: true,
   roofs: true,
   wall: 'none',
 };
 
-type Kind = 'maison' | 'taverne' | 'forge' | 'echoppe' | 'chapelle' | 'grange' | 'entrepot';
+type Kind = BuildingKind;
 
 const NAMES: Record<Kind, string[]> = {
   maison: ['Maison'],
@@ -50,14 +52,6 @@ const NAMES: Record<Kind, string[]> = {
   entrepot: ['Entrepôt'],
 };
 
-interface Building {
-  x: number;
-  y: number;
-  w: number; // largeur (le long de la rue)
-  d: number; // profondeur
-  front: number; // côté donnant sur la rue : 0=N 1=E 2=S 3=O
-  kind: Kind;
-}
 
 function roofKind(kind: Kind, town: boolean, rng: Rng): string {
   switch (kind) {
@@ -237,21 +231,29 @@ export function generateVillage(p: VillageParams): DungeonMap {
     if (buildings.length >= p.buildings) break;
     let kind = rng.weighted(kinds);
     if (unique.has(kind) && (used.get(kind) ?? 0) >= (p.town ? 2 : 1)) kind = 'maison';
-    const big = kind === 'taverne' || kind === 'chapelle' || kind === 'grange' || kind === 'entrepot';
-    const w = rng.int(p.town ? 5 : 4, (p.town ? 9 : 7) + (big ? 2 : 0));
-    const d = rng.int(p.town ? 5 : 4, (p.town ? 8 : 6) + (big ? 2 : 0));
+    const big = kind === 'grange' || kind === 'entrepot';
+    let w = rng.int(p.town ? 6 : 5, (p.town ? 9 : 8) + (big ? 2 : 0));
+    let d = rng.int(p.town ? 5 : 5, (p.town ? 8 : 7) + (big ? 2 : 0));
+    if (kind === 'taverne') {
+      w = rng.int(10, 13);
+      d = rng.int(8, 10);
+    } else if (kind === 'chapelle') {
+      w = rng.int(7, 9);
+      d = rng.int(10, 13);
+    }
     const gap = p.town ? 1 : rng.int(1, 2);
     for (const side of rng.shuffle([-1, 1])) {
       let b: Building;
       // distance du bord de la rue au centre de l'échantillon
       const edge = (c.horiz ? RW : RW) / 2 + gap;
+      const floors = kind === 'taverne' || ((kind === 'maison' || kind === 'echoppe') && rng.chance(p.floors)) ? 2 : 1;
       if (c.horiz) {
         const bx = Math.round(c.x - w / 2);
-        b = side < 0 ? { x: bx, y: Math.floor(c.y - edge - d), w, d, front: 2, kind } : { x: bx, y: Math.ceil(c.y + edge), w, d, front: 0, kind };
+        b = side < 0 ? { x: bx, y: Math.floor(c.y - edge - d), w, d, front: 2, kind, floors } : { x: bx, y: Math.ceil(c.y + edge), w, d, front: 0, kind, floors };
         if (!fits(b.x, b.y, w, d)) continue;
       } else {
         const by = Math.round(c.y - w / 2);
-        b = side < 0 ? { x: Math.floor(c.x - edge - d), y: by, w, d, front: 1, kind } : { x: Math.ceil(c.x + edge), y: by, w, d, front: 3, kind };
+        b = side < 0 ? { x: Math.floor(c.x - edge - d), y: by, w, d, front: 1, kind, floors } : { x: Math.ceil(c.x + edge), y: by, w, d, front: 3, kind, floors };
         if (!fits(b.x, b.y, d, w)) continue;
       }
       buildings.push(b);
@@ -265,43 +267,16 @@ export function generateVillage(p: VillageParams): DungeonMap {
     }
   }
 
-  // --- Construction : sols, portes, fenêtres, cloisons, aménagement
-  const roomId = new Int16Array(N).fill(-1);
-  const rooms: RoomInfo[] = [];
+  // --- Construction : pièces selon le type, mobilier, fenêtres, portes, abords
   const doors: { x: number; y: number; front: number }[] = [];
+  const built: { b: Building; res: BuiltBuilding }[] = [];
+  const outsidePut = (kind: string, x: number, y: number, rot: number, o?: { w?: number; h?: number }) => !!P.put(kind, x, y, rot, o ?? {});
   for (const b of buildings) {
-    const horiz = b.front === 0 || b.front === 2;
-    const bw = horiz ? b.w : b.d,
-      bh = horiz ? b.d : b.w;
-    // (u le long de la façade, v en profondeur depuis la façade) -> case
-    const cell = (u: number, v: number): [number, number] =>
-      b.front === 2 ? [b.x + u, b.y + bh - 1 - v] : b.front === 0 ? [b.x + u, b.y + v] : b.front === 1 ? [b.x + bw - 1 - v, b.y + u] : [b.x + v, b.y + u];
-    // arête entre la profondeur v-1 et v (v = 0 : façade, v = d : mur du fond) en position u
-    const depthEdge = (u: number, v: number, val: number) => {
-      if (b.front === 2) map.setHEdge(b.x + u, b.y + bh - v, val);
-      else if (b.front === 0) map.setHEdge(b.x + u, b.y + v, val);
-      else if (b.front === 1) map.setVEdge(b.x + bw - v, b.y + u, val);
-      else map.setVEdge(b.x + v, b.y + u, val);
-    };
-    // arête latérale (s = 0 : gauche, 1 : droite) à la profondeur v
-    const sideEdge = (s: number, v: number, val: number) => {
-      const u = s === 0 ? 0 : b.w;
-      if (b.front === 2) map.setVEdge(b.x + u, b.y + bh - 1 - v, val);
-      else if (b.front === 0) map.setVEdge(b.x + u, b.y + v, val);
-      else if (b.front === 1) map.setHEdge(b.x + bw - 1 - v, b.y + u, val);
-      else map.setHEdge(b.x + v, b.y + u, val);
-    };
-    const floor = b.kind === 'grange' ? T.DIRT : b.kind === 'forge' || b.kind === 'chapelle' || b.kind === 'entrepot' ? T.STONE : T.WOOD;
-    for (let v = 0; v < b.d; v++)
-      for (let u = 0; u < b.w; u++) {
-        const [x, y] = cell(u, v);
-        map.set(x, y, floor);
-      }
-    // porte de façade (+ chemin jusqu'à la rue)
-    const du = rng.int(1, b.w - 2);
-    depthEdge(du, 0, EDGE.DOOR);
-    const [dx, dy] = cell(du, 0);
+    const res = buildGround(map, b, rng, p.interiors, outsidePut);
+    built.push({ b, res });
+    const { x: dx, y: dy } = res.door;
     doors.push({ x: dx, y: dy, front: b.front });
+    // chemin de la porte à la rue
     const out = [
       [0, -1],
       [1, 0],
@@ -315,52 +290,7 @@ export function generateVillage(p: VillageParams): DungeonMap {
       if (G[y * cols + x] === T.GRASS || G[y * cols + x] === T.DIRT) G[y * cols + x] = roadT;
       P.occ[y * cols + x] = 1;
     }
-    // cloison : pièce de devant + chambre au fond
-    const split = b.kind === 'maison' && b.d >= 6 && b.w >= 4;
-    const sv = split ? Math.floor(b.d * 0.55) : b.d;
-    if (split) {
-      const door = rng.int(1, b.w - 2);
-      for (let u = 0; u < b.w; u++) depthEdge(u, sv, u === door ? EDGE.DOOR : EDGE.WALL);
-    }
-    // porte de derrière
-    if (b.d >= 5 && rng.chance(0.25)) depthEdge(rng.int(1, b.w - 2), b.d, EDGE.DOOR);
-    // fenêtres
-    for (let u = 1; u < b.w - 1; u++) if (Math.abs(u - du) > 1 && rng.chance(0.35)) depthEdge(u, 0, EDGE.WINDOW);
-    for (let u = 1; u < b.w - 1; u++) if (rng.chance(0.2)) depthEdge(u, b.d, EDGE.WINDOW);
-    for (let s = 0; s < 2; s++) for (let v = 1; v < b.d - 1; v++) if (rng.chance(0.18)) sideEdge(s, v, EDGE.WINDOW);
-    // pièces (pour l'aménagement)
-    const parts: [number, number, RoomType][] = split
-      ? [
-          [0, sv, 'cuisine'],
-          [sv, b.d, 'chambre'],
-        ]
-      : [[0, b.d, b.kind]];
-    for (const [v0, v1, type] of parts) {
-      const id = rooms.length;
-      let minX = Infinity,
-        minY = Infinity,
-        maxX = -Infinity,
-        maxY = -Infinity;
-      for (let v = v0; v < v1; v++)
-        for (let u = 0; u < b.w; u++) {
-          const [x, y] = cell(u, v);
-          roomId[y * cols + x] = id;
-          minX = Math.min(minX, x);
-          minY = Math.min(minY, y);
-          maxX = Math.max(maxX, x);
-          maxY = Math.max(maxY, y);
-        }
-      rooms.push({ id, x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1, shape: 'rect', type });
-    }
-    if (p.names) {
-      const [cx0, cy0] = cell(Math.floor(b.w / 2), Math.floor(b.d / 2));
-      map.addLabel({ x: cx0 + 0.5, y: cy0 + 0.5, text: rng.pick(NAMES[b.kind]), size: 0.6, gmOnly: true });
-    }
-  }
-  if (p.interiors > 0) {
-    const occ = new Uint8Array(N);
-    const dresser = new Dresser(map, roomId, occ, rng, p.interiors, p.lights * 0.6);
-    for (const r of rooms) dresser.dress(r);
+    if (p.names) map.addLabel({ x: res.center[0], y: res.center[1], text: rng.pick(NAMES[b.kind]), size: 0.6, gmOnly: true });
   }
   // les labels ne doivent pas recouvrir les tables : on les laisse au centre (texte MJ discret)
 
@@ -522,34 +452,15 @@ export function generateVillage(p: VillageParams): DungeonMap {
     if (rng.chance(0.5)) P.put('haystack', fx - 1.5, fy + 0.5, 0);
   }
 
-  // --- Abords des bâtiments : tonneaux, caisses, charrettes, fleurs
-  for (const b of buildings) {
+  // --- Toits : un par bâtiment, léger débord pour couvrir les murs (aussi à l'étage)
+  const roofOf = (b: Building, kind: string) => {
     const horiz = b.front === 0 || b.front === 2;
     const bw = horiz ? b.w : b.d,
       bh = horiz ? b.d : b.w;
-    const n = b.kind === 'grange' || b.kind === 'entrepot' || b.kind === 'forge' ? 3 : 1;
-    for (let k = 0; k < n; k++) {
-      const side = rng.int(0, 3);
-      const t = rng.float(0.2, 0.8);
-      const kind = b.kind === 'grange' ? rng.pick(['haystack', 'cart', 'barrel']) : rng.pick(['barrel', 'crate', 'flowers', 'bush']);
-      // objet adossé au mur, grand côté parallèle au mur
-      const cart = kind === 'cart';
-      const off = cart ? 0.9 : 0.5;
-      const x = side === 1 ? b.x + bw + off : side === 3 ? b.x - off : Math.floor(b.x + t * bw) + 0.5;
-      const y = side === 0 ? b.y - off : side === 2 ? b.y + bh + off : Math.floor(b.y + t * bh) + 0.5;
-      P.put(kind, x, y, cart ? (side % 2 ? 0 : 90) : rng.int(0, 3) * 90);
-    }
-  }
-
-  // --- Toits : un par bâtiment, léger débord pour couvrir les murs
-  if (p.roofs)
-    for (const b of buildings) {
-      const horiz = b.front === 0 || b.front === 2;
-      const bw = horiz ? b.w : b.d,
-        bh = horiz ? b.d : b.w;
-      const kind = roofKind(b.kind, p.town, rng);
-      map.props.push({ id: uid(), kind, x: b.x + bw / 2, y: b.y + bh / 2, w: bw + 0.3, h: bh + 0.3, rot: 0, gmOnly: false });
-    }
+    return { id: uid(), kind, x: b.x + bw / 2, y: b.y + bh / 2, w: bw + 0.3, h: bh + 0.3, rot: 0, gmOnly: false };
+  };
+  const roofKinds = new Map(buildings.map((b) => [b, roofKind(b.kind, p.town, rng)]));
+  if (p.roofs) for (const b of buildings) map.props.push(roofOf(b, roofKinds.get(b)!));
 
   // --- Arbres et buissons sur l'herbe libre (plus denses vers les bords)
   for (let y = 0; y < rows; y++)
@@ -565,6 +476,17 @@ export function generateVillage(p: VillageParams): DungeonMap {
         P.block(x, y);
       } else if (r < pr + 0.015 * p.trees) P.put(rng.chance(0.6) ? 'bush' : 'flowers', x + 0.5, y + 0.5, 0);
     }
+
+  // --- Étages : un niveau au-dessus, avec les étages des bâtiments (escalier au même endroit)
+  const upper = built.filter((x) => x.b.floors > 1);
+  if (upper.length) {
+    map.addLevel('above', false);
+    for (const { b, res } of upper) {
+      buildUpper(map, res, rng, p.interiors);
+      if (p.roofs) map.props.push(roofOf(b, roofKinds.get(b)!));
+    }
+    map.cur = 0;
+  }
 
   map.settings.wallStyle = 'straight';
   map.touchAll();
